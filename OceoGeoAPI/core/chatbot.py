@@ -5,17 +5,9 @@ from agno.agent import Agent
 from agno.models.ollama import Ollama
 
 from config import MODEL
-from core.tools import create_sql_tool
+from core.tools import create_sql_tool, create_initialize_context_tool, create_process_data_tool
 from services.NeondbService import NeonDBService
 from core.glossary import GLOSSARY
-import re
-
-from agno.agent import Agent
-from agno.models.ollama import Ollama
-
-from config import MODEL
-from core.tools import create_sql_tool
-from services.NeondbService import NeonDBService
 
 
 def classify_intent(message: str, system_message: str) -> str:
@@ -29,7 +21,7 @@ def classify_intent(message: str, system_message: str) -> str:
     raw = (response.content or "").strip().upper()
 
     # The model might wrap the label in extra text/thinking — extract the label
-    for label in ("SQL", "CONTEXT", "DOMAIN", "OFF_TOPIC"):
+    for label in ("SQL", "CONTEXT", "DOMAIN", "MULTITOOL", "OFF_TOPIC"):
         if label in raw:
             return label
     return "OFF_TOPIC"
@@ -145,6 +137,53 @@ def run_domain_agent(message: str, system_message: str) -> str:
     )
     response = agent.run(message)
     return (response.content or "").strip()
+
+
+def run_multitool_agent(
+    message: str,
+    user_id: str,
+    project_id: int,
+    system_message: str,
+) -> dict:
+    """
+    Run a multi-tool agent that MUST call initialize_context first,
+    then process_data with the returned context_token.
+    """
+    init_tool = create_initialize_context_tool(project_id, user_id)
+    process_tool = create_process_data_tool(project_id, user_id)
+
+    agent = Agent(
+        model=Ollama(id=MODEL),
+        system_message=system_message,
+        tools=[init_tool, process_tool],
+        markdown=False,
+    )
+
+    response = agent.run(message)
+    content = (response.content or "").strip()
+
+    tool_calls = []
+    tool_results = []
+
+    if response.tools:
+        for tool_use in response.tools:
+            tool_name = getattr(tool_use, "tool_name", "unknown")
+            tool_args = getattr(tool_use, "tool_args", {})
+            tool_result = getattr(tool_use, "result", None)
+            
+            tool_calls.append({"tool": tool_name, "args": tool_args})
+            if tool_result:
+                try:
+                    tool_results.append(json.loads(tool_result))
+                except (json.JSONDecodeError, TypeError):
+                    tool_results.append({"raw": tool_result})
+
+    return {
+        "intent": "MULTITOOL",
+        "content": content,
+        "tool_calls": tool_calls,
+        "tool_results": tool_results,
+    }
 
 
 def run_context_agent(message: str, context: dict | None, system_message: str) -> str:

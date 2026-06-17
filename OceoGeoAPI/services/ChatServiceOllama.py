@@ -2,7 +2,7 @@ import os
 import logging
 
 from services.NeondbService import NeonDBService
-from core.chatbot import classify_intent, run_sql_agent, run_domain_agent, run_context_agent
+from core.chatbot import classify_intent, run_sql_agent, run_domain_agent, run_context_agent, run_multitool_agent
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ class ChatServiceOllama:
         self.sql_prompt = _load_prompt("sql_prompt.md")
         self.domain_prompt = _load_prompt("domain_prompt.md")
         self.context_prompt = _load_prompt("context_prompt.md")
+        self.multitool_prompt = _load_prompt("multitool_prompt.md")
 
     def process_message(self, message: str, user_id: str, project_id: int, context: dict | None = None) -> dict:
         """
@@ -90,6 +91,24 @@ class ChatServiceOllama:
                 return {
                     "intent": "CONTEXT",
                     "response": "Sorry, I encountered an error interpreting this context. Please try again.",
+                }
+
+        if intent == "MULTITOOL":
+            try:
+                result = run_multitool_agent(
+                    message=message,
+                    user_id=user_id,
+                    project_id=project_id,
+                    system_message=self.multitool_prompt,
+                )
+                return {"intent": "MULTITOOL", **result}
+            except Exception:
+                logger.exception("Multi-tool agent failed")
+                return {
+                    "intent": "MULTITOOL",
+                    "content": "Sorry, I encountered an error running the multi-tool analysis. Please try again.",
+                    "tool_calls": [],
+                    "tool_results": [],
                 }
 
         # OFF_TOPIC

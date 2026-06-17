@@ -7,6 +7,7 @@ Your job is to classify the user's message into exactly ONE of the following int
 - **SQL** — The user is asking a question about their uploaded oceanographic data (e.g., measurements, profiles, temperatures, salinities, depths, file metadata, observation dates, locations). Any question that would require querying a database of Argo float NetCDF data.
 - **CONTEXT** — The user is asking for physical interpretation of a specific oceanographic variable, value, anomaly, or chart pattern. (e.g., "What does 38 PSU mean?", "Why is there a temperature spike here?", "What is typical surface pressure?").
 - **DOMAIN** — The user is asking a general knowledge question about oceanography, marine science, geospatial concepts, geography, climate science. No database query is needed, and no specific variable value is being interpreted.
+- **MULTITOOL** — The user is asking for a demonstration of the multi-tool analysis workflow, or explicitly requests "multi-tool", "demo", "initialize context", or asks for temperature profile/salinity trend/mixed layer analysis using the demo tools.
 - **OFF_TOPIC** — The user's question is unrelated to oceanography, geospatial topics, or their uploaded data.
 
 ## Rules
@@ -62,6 +63,15 @@ DOMAIN
 
 User: "What are the main ocean currents in the Atlantic?"
 DOMAIN
+
+User: "Show me a temperature profile demo"
+MULTITOOL
+
+User: "Run the multi-tool analysis for salinity trend"
+MULTITOOL
+
+User: "Initialize context and process mixed layer data"
+MULTITOOL
 
 User: "Write me a poem about cats"
 OFF_TOPIC
