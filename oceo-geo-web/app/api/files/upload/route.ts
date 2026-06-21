@@ -29,6 +29,7 @@ export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const files = formData.getAll("file") as File[];
   const projectId = formData.get("project_id") as string | null;
+  const selectedParams = formData.get("selected_params") as string | null;
 
   if (!files.length || !projectId) {
     return NextResponse.json(
@@ -59,6 +60,7 @@ export async function POST(request: NextRequest) {
       backendForm.append("file", file);
       backendForm.append("user_id", userId);
       backendForm.append("project_id", projectId);
+      backendForm.append("selected_params", selectedParams || "");
 
       const response = await fetch(`${API_URL}/files/process`, {
         method: "POST",
@@ -71,7 +73,10 @@ export async function POST(request: NextRequest) {
         results.push({
           filename: name,
           status: "error",
-          error: data.detail || data.error || `Server responded with ${response.status}`,
+          error:
+            data.detail ||
+            data.error ||
+            `Server responded with ${response.status}`,
         });
       } else {
         results.push({

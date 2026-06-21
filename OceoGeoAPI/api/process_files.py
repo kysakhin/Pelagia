@@ -11,6 +11,7 @@ async def process_file(
     file: UploadFile = File(...),
     user_id: str = Form(...),
     project_id: int = Form(...),   # SERIAL integer in the `projects` table
+    selected_params: str = Form(default=""),
 ):
     """
     Process an uploaded ARGO NetCDF file and store the parsed data in Neon DB.
@@ -45,7 +46,7 @@ async def process_file(
 
     try:
         service = ProcessService()
-        result = await service.process_netcdf(file, user_id=user_id, project_id=project_id)
+        result = await service.process_netcdf(file, user_id=user_id, project_id=project_id, selected_params=selected_params)
         return {
             "status": "success",
             "filename": file.filename,
@@ -61,3 +62,37 @@ async def process_file(
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing file: {e}")
+
+
+@router.post("/scan")
+async def scan_file(
+    file: UploadFile = File(...),
+):
+    """
+    Scans a NetCDF file for core parameters and available extras.
+    Returns a summary of the file's contents.
+    Does not write anything to the database.
+    Should be fast (<1 second for any file size).
+    """
+    try:
+        service = ProcessService()
+        result = await service.scan_netcdf(file)
+
+        if not result:
+            raise ValueError("No data variables found in the file")
+
+        return {
+            "status": "success",
+            "filename": file.filename,
+            "core_params": result["core_params"],
+            "bgc_params": result["bgc_params"],
+            "available_extras": result["available_extras"],
+        }
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error scanning file: {e}")

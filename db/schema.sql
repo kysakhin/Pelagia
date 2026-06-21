@@ -1,4 +1,12 @@
 CREATE SCHEMA "public";
+CREATE TABLE "conversations" (
+	"conversation_id" serial PRIMARY KEY,
+	"project_id" integer NOT NULL,
+	"user_id" text NOT NULL,
+	"title" text,
+	"created_at" timestamp DEFAULT CURRENT_TIMESTAMP,
+	"updated_at" timestamp DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE "files" (
 	"file_id" serial PRIMARY KEY,
 	"project_id" integer NOT NULL,
@@ -6,7 +14,8 @@ CREATE TABLE "files" (
 	"platform_number" text,
 	"data_centre" text,
 	"file_size_bytes" bigint,
-	"upload_date" timestamp DEFAULT CURRENT_TIMESTAMP
+	"upload_date" timestamp DEFAULT CURRENT_TIMESTAMP,
+	"file_type" text DEFAULT 'CORE'
 );
 CREATE TABLE "measurements" (
 	"measurement_id" bigserial PRIMARY KEY,
@@ -23,7 +32,20 @@ CREATE TABLE "measurements" (
 	"salinity" real,
 	"salinity_qc" integer,
 	"salinity_adjusted" real,
-	"salinity_adjusted_qc" integer
+	"salinity_adjusted_qc" integer,
+	"extras" jsonb
+);
+CREATE TABLE "messages" (
+	"message_id" bigserial PRIMARY KEY,
+	"conversation_id" integer NOT NULL,
+	"role" text NOT NULL,
+	"content" text,
+	"intent" text,
+	"sql_query" text,
+	"sql_data" jsonb,
+	"chart_spec" jsonb,
+	"created_at" timestamp DEFAULT CURRENT_TIMESTAMP,
+	CONSTRAINT "messages_role_check" CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text, 'system'::text])))
 );
 CREATE TABLE "profiles" (
 	"profile_id" serial PRIMARY KEY,
@@ -33,7 +55,14 @@ CREATE TABLE "profiles" (
 	"latitude" real,
 	"longitude" real,
 	"position_qc" integer,
-	"observed_at" timestamp
+	"observed_at" timestamp,
+	"data_mode" text
+);
+CREATE TABLE "project_parameters" (
+	"project_id" integer,
+	"parameter_name" text,
+	"measurement_count" bigint DEFAULT 0,
+	CONSTRAINT "project_parameters_pkey" PRIMARY KEY("project_id","parameter_name")
 );
 CREATE TABLE "projects" (
 	"project_id" serial PRIMARY KEY,
@@ -51,21 +80,31 @@ CREATE TABLE "users" (
 	"full_name" text,
 	"created_at" timestamp DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX "conversations_pkey" ON "conversations" ("conversation_id");
+CREATE INDEX "idx_conversations_project" ON "conversations" ("project_id");
+CREATE INDEX "idx_conversations_user" ON "conversations" ("user_id");
 CREATE UNIQUE INDEX "files_pkey" ON "files" ("file_id");
 CREATE INDEX "idx_files_project_id" ON "files" ("project_id");
 CREATE INDEX "idx_measurements_depth" ON "measurements" ("depth_level");
 CREATE INDEX "idx_measurements_profile_id" ON "measurements" ("profile_id");
 CREATE UNIQUE INDEX "measurements_pkey" ON "measurements" ("measurement_id");
+CREATE INDEX "idx_messages_conversation" ON "messages" ("conversation_id");
+CREATE UNIQUE INDEX "messages_pkey" ON "messages" ("message_id");
 CREATE INDEX "idx_profiles_file_id" ON "profiles" ("file_id");
 CREATE INDEX "idx_profiles_lat_lon" ON "profiles" ("latitude","longitude");
 CREATE INDEX "idx_profiles_observed_at" ON "profiles" ("observed_at");
 CREATE UNIQUE INDEX "profiles_pkey" ON "profiles" ("profile_id");
+CREATE UNIQUE INDEX "project_parameters_pkey" ON "project_parameters" ("project_id","parameter_name");
 CREATE INDEX "idx_projects_user_id" ON "projects" ("user_id");
 CREATE UNIQUE INDEX "projects_pkey" ON "projects" ("project_id");
 CREATE UNIQUE INDEX "projects_user_id_project_name_key" ON "projects" ("user_id","project_name");
 CREATE UNIQUE INDEX "users_email_key" ON "users" ("email");
 CREATE UNIQUE INDEX "users_pkey" ON "users" ("user_id");
+ALTER TABLE "conversations" ADD CONSTRAINT "conversations_project_id_fkey" FOREIGN KEY ("project_id") REFERENCES "projects"("project_id") ON DELETE CASCADE;
+ALTER TABLE "conversations" ADD CONSTRAINT "conversations_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE CASCADE;
 ALTER TABLE "files" ADD CONSTRAINT "files_project_id_fkey" FOREIGN KEY ("project_id") REFERENCES "projects"("project_id") ON DELETE CASCADE;
 ALTER TABLE "measurements" ADD CONSTRAINT "measurements_profile_id_fkey" FOREIGN KEY ("profile_id") REFERENCES "profiles"("profile_id") ON DELETE CASCADE;
+ALTER TABLE "messages" ADD CONSTRAINT "messages_conversation_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "conversations"("conversation_id") ON DELETE CASCADE;
 ALTER TABLE "profiles" ADD CONSTRAINT "profiles_file_id_fkey" FOREIGN KEY ("file_id") REFERENCES "files"("file_id") ON DELETE CASCADE;
+ALTER TABLE "project_parameters" ADD CONSTRAINT "project_parameters_project_id_fkey" FOREIGN KEY ("project_id") REFERENCES "projects"("project_id") ON DELETE CASCADE;
 ALTER TABLE "projects" ADD CONSTRAINT "projects_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE CASCADE;

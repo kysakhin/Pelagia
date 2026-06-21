@@ -3,7 +3,6 @@ from contextlib import contextmanager
 
 import psycopg2
 import psycopg2.extras
-
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -132,23 +131,51 @@ class NeonDBService:
                 temperature,          temperature_qc,
                 temperature_adjusted, temperature_adjusted_qc,
                 salinity,             salinity_qc,
-                salinity_adjusted,    salinity_adjusted_qc
+                salinity_adjusted,    salinity_adjusted_qc,
+                extras
             ) VALUES %s
             """,
             [
                 (
                     m["profile_id"],
                     m.get("depth_level"),
-                    m.get("pressure"),              m.get("pressure_qc"),
-                    m.get("pressure_adjusted"),     m.get("pressure_adjusted_qc"),
-                    m.get("temperature"),           m.get("temperature_qc"),
-                    m.get("temperature_adjusted"),  m.get("temperature_adjusted_qc"),
-                    m.get("salinity"),              m.get("salinity_qc"),
-                    m.get("salinity_adjusted"),     m.get("salinity_adjusted_qc"),
+                    m.get("pressure"),
+                    m.get("pressure_qc"),
+                    m.get("pressure_adjusted"),
+                    m.get("pressure_adjusted_qc"),
+                    m.get("temperature"),
+                    m.get("temperature_qc"),
+                    m.get("temperature_adjusted"),
+                    m.get("temperature_adjusted_qc"),
+                    m.get("salinity"),
+                    m.get("salinity_qc"),
+                    m.get("salinity_adjusted"),
+                    m.get("salinity_adjusted_qc"),
+                    psycopg2.extras.Json(m.get("extras", {})),
                 )
                 for m in measurements
             ],
             page_size=500,
+        )
+
+    # ── project_parameters ────────────────────────────────────────────────────
+
+    def upsert_project_parameters(self, cursor, project_id: int, param_counts: dict[str, int]):
+        """
+        Upsert parameter counts for a project.
+        """
+        if not param_counts:
+            return
+
+        psycopg2.extras.execute_values(
+            cursor,
+            """
+            INSERT INTO project_parameters (project_id, parameter_name, measurement_count)
+            VALUES %s
+            ON CONFLICT (project_id, parameter_name)
+            DO UPDATE SET measurement_count = project_parameters.measurement_count + EXCLUDED.measurement_count
+            """,
+            [(project_id, param, count) for param, count in param_counts.items()]
         )
 
     # ── read queries (chat agent) ─────────────────────────────────────────────

@@ -321,7 +321,7 @@ CORE_PARAMS = {"PRES", "TEMP", "PSAL"}
 PARAM_SUFFIXES = ("", "_QC", "_ADJUSTED", "_ADJUSTED_QC", "_ADJUSTED_ERROR")
 ```
 
-Note: There is **no hardcoded `BGC_PARAMS` set**. The system discovers available parameters from the NetCDF file during the scan pass (see §2.3) and the user selects which ones to store. Any parameter beyond the core set (PRES, TEMP, PSAL) goes into `extras`.
+Note: There are some pre-defined BGC parameters that are always included in the `extras` column. Additionally, the system discovers available parameters from the NetCDF file during the scan pass (see §2.3) and the user selects which ones to store. Any parameter beyond the core set (PRES, TEMP, PSAL) and the pre-defined BGC parameters goes into `extras`.
 
 The function should:
 - Keep the existing extraction logic for pressure, temperature, salinity into typed columns (no changes)
@@ -900,15 +900,15 @@ Wrap `ChartRenderer` in a React error boundary to prevent chart rendering errors
 ### Phase 1 — Foundation (database + processor, no frontend changes)
 
 ```
-1.1  Run migration (see Appendix A) — adds extras column, project_parameters table,
+- [ x ] Run migration (see Appendix A) — adds extras column, project_parameters table,
      data_mode, file_type, conversations + messages tables. Non-destructive.
-1.2  Run verification queries to confirm extras column exists and existing data intact
-1.3  Create /files/scan endpoint — NetCDF header scan, returns available parameters
-1.4  Update processor.py — add extras extraction with user-selected params
-1.5  Update NeondbService.py — add extras column to INSERT, add upsert_project_parameters,
+- [ x ]  Run verification queries to confirm extras column exists and existing data intact
+- [ x ]  Create /files/scan endpoint — NetCDF header scan, returns available parameters
+- [ x ] Update processor.py — add extras extraction with user-selected params
+- [ x ] Update NeondbService.py — add extras column to INSERT, add upsert_project_parameters,
      refactor all inserts to accept cursor for transaction support
-1.6  Update ProcessService.py — wrap pipeline in transaction, accept selected_params
-1.7  Update frontend upload route — two-pass flow (scan → select → process)
+- [ x ] Update ProcessService.py — wrap pipeline in transaction, accept selected_params
+- [  ] Update frontend upload route — two-pass flow (scan → select → process) (pending loading, error and success states)
 1.8  Test: upload a Core Argo .nc file → verify core columns unchanged, extras = NULL,
      no entries in project_parameters
 1.9  Test: upload a BGC-Argo .nc file → select DOXY + CHLA → verify extras populated,
