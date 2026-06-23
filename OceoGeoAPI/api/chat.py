@@ -1,10 +1,10 @@
 ## chat api
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from services.ChatServiceOllama import ChatServiceOllama
+from services.ChatService import ChatService
 
 router = APIRouter()
-service = ChatServiceOllama()
+service = ChatService()
 
 
 class ChatRequest(BaseModel):

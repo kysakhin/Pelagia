@@ -5,13 +5,13 @@ import { auth } from "@clerk/nextjs/server";
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
-  intent?: "SQL" | "DOMAIN" | "OFF_TOPIC";
+  intent?: "SQL" | "DOMAIN" | "OFF_TOPIC" | "ERROR" | "CONTEXT";
   data?: Record<string, unknown>[];
   query?: string;
 }
 
 export interface SendMessageResult {
-  intent: "SQL" | "DOMAIN" | "OFF_TOPIC";
+  intent: "SQL" | "DOMAIN" | "OFF_TOPIC" | "ERROR" | "CONTEXT";
   response?: string;
   summary?: string;
   query?: string;

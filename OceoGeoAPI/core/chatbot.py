@@ -1,30 +1,28 @@
 import json
-import re
 
 from agno.agent import Agent
-from agno.models.ollama import Ollama
+from agno.models.openrouter import OpenRouter
 
-from config import MODEL
 from core.tools import create_sql_tool
 from services.NeondbService import NeonDBService
 from core.glossary import GLOSSARY
-import re
 
-from agno.agent import Agent
-from agno.models.ollama import Ollama
+from config import OPENROUTER_MODEL, OPENROUTER_API_KEY
 
-from config import MODEL
-from core.tools import create_sql_tool
-from services.NeondbService import NeonDBService
-
+def make_openrouter_model(max_tokens: int) -> OpenRouter:
+    return OpenRouter(
+        api_key=OPENROUTER_API_KEY,
+        id=OPENROUTER_MODEL,
+        max_tokens=max_tokens,
+        timeout=30.0,
+        retries=2,
+        delay_between_retries=1,
+        exponential_backoff=True,
+    )
 
 def classify_intent(message: str, system_message: str) -> str:
     """Use a lightweight agent to classify the user message as SQL, DOMAIN, or OFF_TOPIC."""
-    agent = Agent(
-        model=Ollama(id=MODEL),
-        system_message=system_message,
-        markdown=False,
-    )
+    agent = Agent(model=make_openrouter_model(10), system_message=system_message, markdown=False)
     response = agent.run(message)
     raw = (response.content or "").strip().upper()
 
@@ -48,13 +46,7 @@ def run_sql_agent(
     """
     sql_tool = create_sql_tool(project_id, user_id, db)
 
-    agent = Agent(
-        model=Ollama(id=MODEL),
-        # model=Ollama('qwen2.5-coder:7b'),
-        system_message=system_message,
-        tools=[sql_tool],
-        markdown=False
-    )
+    agent = Agent(model=make_openrouter_model(500), system_message=system_message, tools=[sql_tool], markdown=False)
 
     response = agent.run(message)
     content = (response.content or "").strip()
@@ -115,7 +107,7 @@ def run_sql_agent(
     summary = content
     if data:
         summary_agent = Agent(
-            model=Ollama(id=MODEL),
+            model=make_openrouter_model(500),
             system_message=(
                 "You are a helpful oceanographic data analyst. "
                 "Summarize the following SQL query results in clear, concise natural language. "
@@ -139,7 +131,7 @@ def run_sql_agent(
 def run_domain_agent(message: str, system_message: str) -> str:
     """Answer a general oceanographic / geospatial question."""
     agent = Agent(
-        model=Ollama(id=MODEL),
+        model=make_openrouter_model(1000),
         system_message=system_message,
         markdown=True,
     )
@@ -149,11 +141,13 @@ def run_domain_agent(message: str, system_message: str) -> str:
 
 def run_context_agent(message: str, context: dict | None, system_message: str) -> str:
     """Answer a question about a specific variable or chart pattern using the Ground Truth glossary."""
-    
+
     # 1. Prepare the glossary string
     glossary_str = "GLOSSARY GROUND TRUTH:\n"
     for var, details in GLOSSARY.items():
-        glossary_str += f"- {var.upper()} ({details['unit']}): {details['physical_meaning']}\n"
+        glossary_str += (
+            f"- {var.upper()} ({details['unit']}): {details['physical_meaning']}\n"
+        )
         glossary_str += f"  Typical ranges: {details.get('typical_surface_range', '')} / {details.get('typical_deep_range', '')} / {details.get('typical_open_ocean_range', '')} / {details.get('typical_argo_range', '')}\n"
         glossary_str += f"  Anomalies: {details.get('anomaly_note', '')}\n"
 
@@ -168,10 +162,10 @@ def run_context_agent(message: str, context: dict | None, system_message: str) -
     full_system_prompt = system_message + "\n\n" + glossary_str + view_state_str
 
     agent = Agent(
-        model=Ollama(id=MODEL),
+        model=make_openrouter_model(1000),
         system_message=full_system_prompt,
         markdown=True,
     )
-    
+
     response = agent.run(message)
     return (response.content or "").strip()

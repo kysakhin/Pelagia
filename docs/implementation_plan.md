@@ -196,7 +196,7 @@ CREATE TABLE messages (
     content         TEXT,                                   -- The text content
     intent          TEXT,                                   -- SQL, DOMAIN, CONTEXT, OFF_TOPIC
     sql_query       TEXT,                                   -- If intent=SQL, the generated query
-    sql_data        JSONB,                                  -- Truncated preview (max 50 rows)
+    sql_data        JSONB,                                  -- Display/message-preview limited rows
     chart_spec      JSONB,                                  -- If AI produced a chart, the spec
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -204,7 +204,7 @@ CREATE TABLE messages (
 CREATE INDEX idx_messages_conversation ON messages(conversation_id);
 ```
 
-> **Storage note:** `sql_data` stores a **truncated preview** (max 50 rows). The full result set is NOT persisted. When a user revisits a conversation, they see the chart/table from the preview. If they want the full dataset, they re-run the query (the SQL is stored in `sql_query`). This prevents multi-megabyte JSON blobs per message row.
+> **Storage note:** `sql_data` stores a **display/message-preview limited** copy of the SQL rows, not the full result set. Use an application-level limit (for example 50–300 rows) so historical tables/charts can render without storing multi-megabyte JSON blobs. Fresh chat responses can use a runtime `result_id` to access a larger display-limited result in memory/cache; historical views can re-run `sql_query` to get fresh/full data.
 
 #### New: `project_parameters` table (Parameter Catalog)
 
@@ -534,86 +534,136 @@ Mention BGC-Argo in the scope section (dissolved oxygen, chlorophyll, nitrate, p
 
 Add entries for BGC parameters (DOXY, CHLA, NITRATE, PH, etc.) with their units, typical ranges, and anomaly notes.
 
-### 3.3 Chart Spec Generation — Via Agno Tool Calling
+### 3.3 SQL Results + Chart Specs — Result Handle Architecture
 
-> **Design decision:** Use Agno's tool/function calling mechanism instead of regex-parsed inline tags. This is the same pattern as the existing `run_sql_query` tool. OpenRouter models support function calling, and Agno handles the protocol. This is far more reliable than parsing `[CHART]...[/CHART]` from free-form LLM text.
+> **Design decision:** The agent must not generate or re-output chart data. The SQL tool is the source of truth for rows. The agent only decides whether a visualization is useful and, if so, which returned columns should be mapped to the chart axes/encodings.
 
-#### Chart Spec Schema
+The chart flow is split into two deterministic boundaries:
 
-```
-{
-  "chart_type": "scatter" | "line" | "bar" | "histogram" | "heatmap" | "pie" | "area" | "boxplot",
-  "title": "Temperature vs Depth",
-  "x": {
-    "field": "<column alias from SQL result>",
-    "label": "Display Label (Unit)",
-    "type": "value" | "category" | "time",   // optional, default "value"
-    "inverted": true | false                  // optional, for depth axes
-  },
-  "y": {
-    "field": "...",
-    "label": "...",
-    "type": "...",
-    "inverted": true | false
-  },
-  "color_by": "<optional field to color-encode>",
-  "series_group": "<optional field to split into multiple series>",
-  "z": {                         // for heatmap only
-    "field": "...",
-    "label": "..."
-  },
-  "options": {
-    "show_legend": true | false,
-    "show_regression": true | false,
-    "bin_count": 20              // for histogram
-  }
+1. `run_sql_query` executes SQL and stores rows under a runtime `result_id`.
+2. The model emits a small `chart_spec` that references that `result_id` and known column IDs.
+3. Backend application code validates and merges `{ result_id, chart_spec }` into a frontend-ready `{ spec, data }` payload.
+
+The merge step happens **outside the agent frame**. It should be a normal service, not an LLM tool, because no reasoning is required after the model chooses the visualization mapping.
+
+#### Row Limits
+
+Use separate limits for separate jobs:
+
+| Limit | Purpose | Suggested Initial Value |
+|-------|---------|-------------------------|
+| `query_limit` | Maximum rows fetched from Postgres by the SQL tool | 1000–5000 |
+| `model_sample_limit` | Rows shown to the model after SQL execution | 10–30 |
+| `display_limit` | Rows sent to the frontend/table/chart | 300–1000 |
+| `message_preview_limit` | Rows persisted in `messages.sql_data` for history | 50–300 |
+
+For now, lossy downsampling is acceptable. Later, chart-specific aggregation should replace generic truncation for large results: histograms should receive bins, pie/bar charts should receive grouped data, heatmaps should receive gridded/aggregated cells, and dense scatter/line charts should be sampled or decimated.
+
+#### Runtime SQL Result Object
+
+After `run_sql_query` executes, the backend should store the full limited result internally and return only metadata plus a small sample to the model:
+
+```python
+result = {
+    "result_id": "res_01HY...",
+    "row_count": len(rows),
+    "columns": [
+        {"id": "temperature", "type": "number"},
+        {"id": "pressure", "type": "number"},
+    ],
+    "sample_rows": rows[:20],
 }
 ```
 
-#### Implementation Approach
+The model sees `result_id`, column IDs/types, and a small sample. It should not receive the entire SQL result.
 
-Create a `render_chart` Agno tool alongside the existing `run_sql_query` tool:
+#### Chart Spec Schema
+
+```ts
+type ChartSpec = {
+  result_id: string;
+  chart_type: "scatter" | "line" | "bar" | "histogram" | "heatmap" | "pie" | "area" | "boxplot";
+  title: string;
+  encoding: {
+    x?: string;       // must match a column id from result metadata
+    y?: string;       // must match a column id from result metadata
+    z?: string;       // heatmap or 3D-style encodings
+    color?: string;
+    series?: string;
+  };
+  labels?: {
+    x?: string;
+    y?: string;
+    z?: string;
+    color?: string;
+  };
+  options?: {
+    invert_x?: boolean;
+    invert_y?: boolean;
+    show_legend?: boolean;
+    show_regression?: boolean;
+    bin_count?: number;
+  };
+};
+```
+
+The fragile part is field matching. Reduce that fragility by treating SQL aliases as checked column IDs:
+
+- The SQL prompt should instruct the model to use stable, simple aliases: `temperature`, `pressure`, `observed_at`, `cycle_number`, `doxy`.
+- The SQL tool should infer result columns from the executed rows.
+- The chart spec validator must reject any encoding field that is not present in the result metadata.
+- The frontend should never trust a chart spec until the backend has validated it.
+
+#### Optional Structured Output / Tool Call
+
+Do **not** create a `render_chart` tool. The backend/frontend render charts.
+
+If Agno tool calls are more reliable than parsing JSON from free-form assistant text, add a lightweight tool named `create_visualization_spec`. This tool only captures the model's chart decision; it does not receive data and does not render anything.
 
 ```python
-@tool(
-    name="render_chart",
-    description="Produce a chart specification for the frontend to render. You MUST call run_sql_query FIRST to obtain data before calling this tool. The chart spec's field names must match the column aliases in your SQL query. Never call render_chart without first obtaining data from run_sql_query."
-)
-def render_chart(chart_spec: str) -> str:
-    """Accept a chart spec JSON and return it for frontend rendering.
+@tool(name="create_visualization_spec")
+def create_visualization_spec(spec: str) -> str:
+    """Declare how an existing SQL result should be visualized.
 
     Args:
-        chart_spec: A JSON string matching the ChartSpec schema.
+        spec: JSON matching ChartSpec. Must reference a result_id returned by run_sql_query.
     """
-    try:
-        parsed = json.loads(chart_spec)
-        # Validate required fields
-        required = {"chart_type", "title", "x", "y"}
-        if not required.issubset(parsed.keys()):
-            return json.dumps({"error": "Missing required fields in chart spec"})
-        return json.dumps({"status": "ok", "chart_spec": parsed})
-    except json.JSONDecodeError:
-        return json.dumps({"error": "Invalid JSON in chart spec"})
+    parsed = json.loads(spec)
+    return json.dumps({"status": "ok", "chart_spec": parsed})
 ```
 
-The SQL agent gets both tools: `[run_sql_query, render_chart]`. When the user asks to "plot" or "visualize," the agent calls `run_sql_query` first, then `render_chart` with the spec.
+Even with this optional tool, validation and data merging still happen in backend application code.
 
-**Tool ordering enforcement (prompt-level):** Add the following to the SQL agent's system prompt:
+#### Backend Chart Composer
 
+Create a deterministic service that combines the spec with stored SQL rows:
+
+```python
+class ChartPayloadService:
+    def __init__(self, result_store):
+        self.result_store = result_store
+
+    def build(self, chart_spec: dict, display_limit: int = 500) -> dict:
+        result = self.result_store.get(chart_spec["result_id"])
+        columns = {column["id"] for column in result["columns"]}
+
+        for field in chart_spec.get("encoding", {}).values():
+            if field and field not in columns:
+                raise ValueError(f"Unknown chart field: {field}")
+
+        rows = result["rows"][:display_limit]
+        return {
+            "spec": chart_spec,
+            "data": rows,
+            "meta": {
+                "row_count": result["row_count"],
+                "displayed_row_count": len(rows),
+                "truncated": result["row_count"] > len(rows),
+            },
+        }
 ```
-## Tool Calling Rules
-1. ALWAYS call run_sql_query FIRST to fetch data.
-2. ONLY THEN call render_chart if the user asked for a visualization.
-3. NEVER call render_chart without calling run_sql_query first.
-4. The field names in your chart spec (x.field, y.field, color_by, etc.) MUST exactly
-   match the column aliases you used in your SQL query.
-```
 
-This is sufficient because the chosen model (gpt-oss-120b/Claude) reliably follows explicit tool-ordering instructions.
-
-**In `chatbot.py`:** After the agent run, check tool call results for both tools. Extract `chart_spec` from the `render_chart` result if present.
-
-**Fallback:** If the `render_chart` tool call fails (malformed JSON, missing fields), log the error and return the response without a chart. The user still gets the data table and summary text.
+For conversation history, `result_id` is a runtime handle and may not exist after restart. Persist `messages.sql_data` as a display-limited preview so historical charts can still render approximately. A "Re-run query" action can execute the stored `sql_query` again to produce a fresh `result_id` and full current chart payload.
 
 #### Chart type selection guidelines (for the AI prompt):
 
@@ -633,7 +683,7 @@ Before executing any AI-generated SQL, apply these additional checks beyond the 
 1. **JSONB key check:** Verify that every `extras->>'...'` accessor uses a key matching a known parameter in `project_parameters` for the current project. Reject queries with unknown parameter names (prevents hallucinated parameters). Validate against the flat key convention: base name (DOXY), or base name + suffix (DOXY_QC, DOXY_ADJUSTED, etc.).
 2. **Column vs JSONB check:** If the AI tries to use JSONB accessors on core parameters (e.g., `extras->>'TEMP'`), reject and suggest using the typed column instead. Core params are: `temperature`, `salinity`, `pressure` (and their QC/adjusted variants).
 3. **Cast check:** Verify that every `extras->>'...'` extraction is followed by `::float` or `::int`. Reject uncast JSONB access in WHERE/ORDER BY clauses.
-4. **Result size limit:** Always enforce `LIMIT 200` if not already present. The existing tool already does `LIMIT 100` — keep or increase to 200.
+4. **Result size limit:** Always enforce an application-level `query_limit` if the query has no `LIMIT`, and cap any user/model-provided `LIMIT` at the configured maximum. Keep this separate from `model_sample_limit`, `display_limit`, and `message_preview_limit` described in §3.3.
 
 These checks live in `core/tools.py` → `_clean_sql_query()` and the `run_sql_query` function.
 
@@ -647,9 +697,9 @@ For DOMAIN and CONTEXT responses (text-only), implement SSE streaming from the b
 
 ### 4.1 ChartRenderer Component
 
-Create a single, generic `ChartRenderer` component that accepts a chart spec + data array and renders the appropriate ECharts visualization.
+Create a single, generic `ChartRenderer` component that accepts a validated chart payload and renders the appropriate ECharts visualization.
 
-**Input:** `{ spec: ChartSpec, data: Record<string, unknown>[] }`
+**Input:** `{ spec: ChartSpec, data: Record<string, unknown>[], meta?: ChartPayloadMeta }`
 **Output:** Rendered ECharts chart
 
 The component should have a `switch` on `spec.chart_type` that delegates to builder functions:
@@ -661,13 +711,64 @@ The component should have a `switch` on `spec.chart_type` that delegates to buil
 - `buildPie(spec, data)` → ECharts pie config
 - etc.
 
-Each builder reads `spec.x.field`, `spec.y.field` from the data array to construct the series data. This keeps the AI decoupled from ECharts internals — it only needs to know the chart vocabulary.
+Each builder reads `spec.encoding.x`, `spec.encoding.y`, etc. from the data array to construct the series data. This keeps the AI decoupled from ECharts internals — it only needs to know the chart vocabulary.
+
+Example frontend types:
+
+```ts
+type ChartPayload = {
+  spec: ChartSpec;
+  data: Record<string, unknown>[];
+  meta?: {
+    row_count: number;
+    displayed_row_count: number;
+    truncated: boolean;
+  };
+};
+
+function buildScatter(spec: ChartSpec, data: Record<string, unknown>[]) {
+  const x = spec.encoding.x;
+  const y = spec.encoding.y;
+  if (!x || !y) throw new Error("Scatter chart requires x and y fields");
+
+  return {
+    title: { text: spec.title },
+    xAxis: { name: spec.labels?.x ?? x, type: "value", inverse: spec.options?.invert_x },
+    yAxis: { name: spec.labels?.y ?? y, type: "value", inverse: spec.options?.invert_y },
+    series: [
+      {
+        type: "scatter",
+        data: data.map((row) => [row[x], row[y]]),
+      },
+    ],
+  };
+}
+```
 
 **Error boundary:** Wrap `ChartRenderer` in a React error boundary. If the spec is malformed or the data doesn't contain the referenced fields, render a graceful "Could not render chart" message with the raw spec displayed for debugging — don't crash the chat UI.
 
 ### 4.2 Integration into Chat
 
-In the assistant message rendering component, check if `message.chart_spec` exists and `message.data` has rows. If so, render `<ChartRenderer spec={message.chart_spec} data={message.data} />` inline in the chat bubble.
+In the assistant message rendering component, check if the API response includes `chart_payload`. If so, render `<ChartRenderer payload={message.chart_payload} />` inline in the chat bubble.
+
+For saved conversations, load `messages.sql_data` as the historical preview and combine it with `messages.chart_spec` in the frontend or server action:
+
+```ts
+const historicalPayload =
+  message.chart_spec && message.sql_data
+    ? {
+        spec: message.chart_spec,
+        data: message.sql_data,
+        meta: {
+          row_count: message.sql_data.length,
+          displayed_row_count: message.sql_data.length,
+          truncated: true,
+        },
+      }
+    : null;
+```
+
+For fresh chat responses, prefer the backend-composed `chart_payload` because it has already been validated against the runtime SQL result.
 
 ### 4.3 Supported Chart Types (Phased)
 
@@ -762,11 +863,13 @@ Once Phase 4 is complete and tested end-to-end:
 
 1. User sends message → immediately save to `messages` table with `role='user'`
 2. Call backend AI → get response
-3. Save assistant response to `messages` with `role='assistant'`, `intent`, `sql_query`, `sql_data` (truncated to 50 rows max), `chart_spec`
+3. Save assistant response to `messages` with `role='assistant'`, `intent`, `sql_query`, `sql_data` (display/message-preview limited), `chart_spec`
 4. On page load / conversation switch → load messages with **pagination** (latest 50 messages, load more on scroll-up)
 5. Conversation title → auto-generated from the first user message (truncated to ~50 chars)
 
-**Re-run capability:** When a user views a historical conversation with a chart, the chart renders from the stored `sql_data` preview. A "Re-run query" button can re-execute the stored `sql_query` to get fresh/full data.
+**Runtime vs persisted data:** Fresh chat responses may include a runtime `result_id` and a validated `chart_payload`. That `result_id` is not guaranteed to survive process restarts. Persist `sql_data` as a display-limited preview so historical charts still render without re-querying the database.
+
+**Re-run capability:** When a user views a historical conversation with a chart, the chart renders from the stored `sql_data` preview. A "Re-run query" button can re-execute the stored `sql_query` to get fresh data, a new runtime `result_id`, and a newly composed `chart_payload`.
 
 ---
 
@@ -872,8 +975,9 @@ The old file creates a raw `neon()` query function. Replace entirely with the Dr
 | Intent classification fails | Default to "OFF_TOPIC" (existing behavior, keep it) |
 | SQL agent generates invalid SQL | The SQL tool already catches exceptions and returns `{"error": "..."}`. Add more specific error messages for common JSONB syntax errors. |
 | SQL agent generates valid SQL with wrong results | Not detectable at runtime. Mitigate through extensive few-shot examples in the prompt. |
-| Chart spec tool call produces invalid JSON | Log error, return response without chart. User still gets data table + summary. |
-| Chart spec references fields not in SQL result | Frontend ChartRenderer catches this and shows "Could not render chart" — not a backend concern. |
+| Chart spec JSON is malformed | Log error, return response without chart. User still gets data table + summary. |
+| Chart spec references fields not in SQL result | Backend ChartPayloadService rejects the spec before sending it to the frontend. Return the table + summary without a chart, and log the invalid field. |
+| Runtime `result_id` is missing/expired | Fall back to stored `messages.sql_data` preview for historical messages, or ask the user to re-run the query for fresh data. |
 
 ### 7.3 Database Errors
 
@@ -908,36 +1012,44 @@ Wrap `ChartRenderer` in a React error boundary to prevent chart rendering errors
 - [ x ] Update NeondbService.py — add extras column to INSERT, add upsert_project_parameters,
      refactor all inserts to accept cursor for transaction support
 - [ x ] Update ProcessService.py — wrap pipeline in transaction, accept selected_params
-- [  ] Update frontend upload route — two-pass flow (scan → select → process) (pending loading, error and success states)
-1.8  Test: upload a Core Argo .nc file → verify core columns unchanged, extras = NULL,
+- [ x ] Update frontend upload route — two-pass flow (scan → select → process)
+- [ x ] Test: upload a Core Argo .nc file → verify core columns unchanged, extras = NULL,
      no entries in project_parameters
-1.9  Test: upload a BGC-Argo .nc file → select DOXY + CHLA → verify extras populated,
+- [ x ] Test: upload a BGC-Argo .nc file → select DOXY + CHLA → verify extras populated,
      project_parameters updated with counts
-1.10 Test: upload a second BGC file to same project → verify project_parameters
+- [ x ] Test: upload a second BGC file to same project → verify project_parameters
      counts accumulate correctly
-1.11 Test: simulate failure mid-pipeline → verify transaction rollback
-     (no orphaned file/profile/measurement records)
+- [ x ] Test: simulate failure mid-pipeline → verify transaction rollback
+     (no orphaned file/profile/measurement records) (TD: Unit Testing on this would be better)
 ```
 
 ### Phase 2 — AI Layer
 
 ```
-2.1  Switch config.py + chatbot.py to OpenRouter (with timeout + retry)
+- [ x ] Switch config.py + chatbot.py to OpenRouter (with timeout + retry)
 2.2  Rewrite sql_prompt.md — add flat extras JSONB docs, project_parameters catalog,
      dynamic param injection, keep existing core query docs
-2.3  Add render_chart tool to tools.py (with ordering instructions in description)
-2.4  Update chatbot.py — extract chart_spec from tool results, inject available
-     params from project_parameters into system prompt
-2.5  TEST SUITE (at least 10 queries):
+2.3  Update run_sql_query to return a runtime result_id + column metadata + small
+     model sample, while storing display-limited rows server-side
+2.4  Add ChartPayloadService / result store — validate chart specs against result
+     columns and compose { spec, data, meta } outside the agent frame
+2.5  Add structured chart_spec output. Prefer plain structured JSON first; optionally
+     use a create_visualization_spec tool if Agno tool calls are more reliable.
+     Do not create a render_chart tool.
+2.6  Update chatbot.py — extract chart_spec from structured output/tool result,
+     inject available params from project_parameters into system prompt, compose
+     chart_payload when a chart_spec is valid
+2.7  TEST SUITE (at least 10 queries):
      - "what is the average temperature" → uses typed column directly (no JSONB)
-     - "show me temperature vs depth" → scatter chart_spec
+     - "show me temperature vs depth" → SQL result_id + scatter chart_spec + chart_payload
      - "how many profiles are in my project" → count query
      - "what parameters are available" → queries project_parameters table
-     - "plot dissolved oxygen vs depth" → extras JSONB query + chart_spec
+     - "plot dissolved oxygen vs depth" → extras JSONB query + result_id + chart_payload
      - "show me salinity at 500m" → pressure range filter (typed column)
      - "what files have been uploaded" → files table query
      - "compare temperature and salinity" → T-S scatter chart (typed columns)
      - "distribution of temperature" → histogram chart_spec
+     - Edge case: chart_spec references unknown column → backend rejects chart, keeps summary/table
      - Edge case: ask about a parameter that doesn't exist → graceful message
 ```
 
@@ -949,8 +1061,9 @@ Wrap `ChartRenderer` in a React error boundary to prevent chart rendering errors
 3.3  Create lib/db/index.ts with Drizzle client
 3.4  Migrate server actions to Drizzle (projects.ts, user.ts)
 3.5  Create conversations.ts server actions (with auth enforcement)
-3.6  Build ChartRenderer.tsx with error boundary
-3.7  Test ChartRenderer with mock specs for each supported chart type
+3.6  Add chat response/message types for chart_spec, chart_payload, and sql_data preview
+3.7  Build ChartRenderer.tsx with error boundary, reading spec.encoding fields
+3.8  Test ChartRenderer with mock chart_payloads for each supported chart type
 ```
 
 ### Phase 4 — UI Overhaul (incremental, old UI stays functional)
@@ -1089,9 +1202,10 @@ COMMIT;
 | `config.py` | MODIFY | Remove hardcoded model, read from env |
 | `.env` | MODIFY | Add OPENROUTER_API_KEY, OPENROUTER_MODEL |
 | `core/processor.py` | MODIFY | Add extras extraction with user-selected params, NaN sanitization |
-| `core/chatbot.py` | MODIFY | Ollama → OpenRouter, chart_spec from tool calls, inject project params, fix imports, add timeouts |
+| `core/chatbot.py` | MODIFY | Ollama → OpenRouter, structured chart_spec extraction, inject project params, compose chart_payload, fix imports, add timeouts |
 | `core/glossary.py` | MODIFY | Add BGC parameter entries |
-| `core/tools.py` | MODIFY | Add `render_chart` tool (with ordering instructions), extras JSONB SQL validation |
+| `core/tools.py` | MODIFY | Update `run_sql_query` result metadata/result_id behavior, extras JSONB SQL validation |
+| `core/chart_payload.py` | NEW | Result store + ChartPayloadService to validate chart specs and compose `{ spec, data, meta }` outside the agent |
 | `core/prompts/sql_prompt.md` | REWRITE | Flat extras JSONB docs, project_parameters catalog, dynamic param injection, 8–10 examples |
 | `core/prompts/intent_prompt.md` | MODIFY | Add chart guidance within SQL intent |
 | `core/prompts/domain_prompt.md` | MODIFY | Mention BGC-Argo in scope |
@@ -1099,8 +1213,8 @@ COMMIT;
 | `services/NeondbService.py` | MODIFY | Add extras to INSERT, data_mode, file_type, upsert_project_parameters, cursor-based methods for txn |
 | `services/ProcessService.py` | MODIFY | Wrap pipeline in transaction, accept selected_params, detect file type |
 | `services/StatsService.py` | DEPRECATED | Keep code, no longer called |
-| `services/ChatServiceOllama.py` | MODIFY | Pass chart_spec through, query project_parameters for prompt injection, add timeout |
-| `api/chat.py` | MODIFY | Include chart_spec in response |
+| `services/ChatServiceOllama.py` | MODIFY | Pass chart_spec/chart_payload through, query project_parameters for prompt injection, add timeout |
+| `api/chat.py` | MODIFY | Include chart_spec and chart_payload in response |
 | `api/files.py` | NEW | `/files/scan` endpoint for parameter discovery |
 | `api/stats.py` | DEPRECATED | Keep code, no longer routed |
 
@@ -1113,11 +1227,11 @@ COMMIT;
 | `lib/db.ts` | DELETE | Replaced by lib/db/index.ts |
 | `lib/actions/projects.ts` | MODIFY | Drizzle queries |
 | `lib/actions/user.ts` | MODIFY | Drizzle queries |
-| `lib/actions/chat.ts` | MODIFY | Add chart_spec to types, message persistence |
+| `lib/actions/chat.ts` | MODIFY | Add chart_spec, chart_payload, sql_data preview types; message persistence |
 | `lib/actions/conversations.ts` | NEW | Conversation CRUD with auth enforcement |
 | `app/api/files/scan/route.ts` | NEW | Proxy to backend `/files/scan` for parameter discovery |
 | `app/api/files/upload/route.ts` | MODIFY | Add selected_params to form data sent to backend |
-| `components/ChartRenderer.tsx` | NEW | Generic chart renderer with error boundary |
+| `components/ChartRenderer.tsx` | NEW | Generic chart renderer with error boundary; consumes validated chart_payload |
 | `components/ChatView.tsx` | NEW | New chat interface |
 | `components/ChatLayout.tsx` | NEW | Sidebar + chat layout |
 | `components/ConversationSidebar.tsx` | NEW | Conversation list |

@@ -8,7 +8,7 @@ interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
-  intent?: "SQL" | "DOMAIN" | "OFF_TOPIC" | "CONTEXT";
+  intent?: "SQL" | "DOMAIN" | "OFF_TOPIC" | "CONTEXT" | "ERROR";
   data?: Record<string, unknown>[];
   query?: string;
   error?: boolean;
@@ -77,6 +77,7 @@ function AssistantMessage({ message }: { message: Message }) {
     DOMAIN: "KNOWLEDGE",
     CONTEXT: "DATA INTERPRETATION",
     OFF_TOPIC: "OUT OF SCOPE",
+    ERROR: "ERROR",
   };
 
   return (
@@ -156,6 +157,7 @@ export default function AnalyticsChatPanel({
           content: result.summary ?? result.response ?? "No response received.",
           data: result.data,
           query: result.query,
+          error: result.intent === "ERROR",
         };
 
         setMessages((prev) => [...prev, assistantMsg]);
