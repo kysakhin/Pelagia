@@ -58,17 +58,20 @@ class NeonDBService:
         filename: str,
         metadata: dict,
         file_size_bytes: int | None = None,
+        file_type: str = "CORE",
     ) -> int:
         """
         Insert a row into `files` and return the generated file_id.
 
         project_id must already exist in `projects` (validated by the FK).
         metadata keys used: platform_number, data_centre
+        file_type: 'CORE', 'BGC', or 'SPROF' (default CORE).
         """
         cursor.execute(
             """
-            INSERT INTO files (project_id, filename, platform_number, data_centre, file_size_bytes)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO files (project_id, filename, platform_number, data_centre,
+                               file_size_bytes, file_type)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING file_id
             """,
             (
@@ -77,6 +80,7 @@ class NeonDBService:
                 metadata.get("platform_number"),
                 metadata.get("data_centre"),
                 file_size_bytes,
+                file_type,
             ),
         )
         return cursor.fetchone()[0]
@@ -87,20 +91,21 @@ class NeonDBService:
         """
         Insert a row into `profiles` and return the generated profile_id.
 
-        profile keys: cycle_number, direction, latitude, longitude,
+        profile keys: cycle_number, direction, data_mode, latitude, longitude,
                       position_qc, observed_at (ISO string or None)
         """
         cursor.execute(
             """
-            INSERT INTO profiles (file_id, cycle_number, direction, latitude, longitude,
-                                  position_qc, observed_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO profiles (file_id, cycle_number, direction, data_mode,
+                                  latitude, longitude, position_qc, observed_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING profile_id
             """,
             (
                 file_id,
                 profile.get("cycle_number"),
                 profile.get("direction"),
+                profile.get("data_mode"),
                 profile.get("latitude"),
                 profile.get("longitude"),
                 profile.get("position_qc"),
@@ -177,6 +182,27 @@ class NeonDBService:
             """,
             [(project_id, param, count) for param, count in param_counts.items()]
         )
+
+    # ── project_parameters ────────────────────────────────────────────────────
+
+    def get_project_parameters(self, project_id: int) -> list[str]:
+        """
+        Return the list of extras parameter base names available for a project,
+        ordered alphabetically. Used to inject available params into the SQL
+        agent system prompt.
+        """
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT parameter_name
+                    FROM project_parameters
+                    WHERE project_id = %s
+                    ORDER BY parameter_name
+                    """,
+                    (project_id,),
+                )
+                return [row[0] for row in cur.fetchall()]
 
     # ── read queries (chat agent) ─────────────────────────────────────────────
 

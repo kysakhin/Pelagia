@@ -37,6 +37,14 @@ class ProcessService:
         metadata = extract_file_metadata(ds)
         profiles = extract_profiles(ds, selected_params)
 
+        # 1b. Determine file_type from the user's parameter selection.
+        # Any non-core selected parameter → BGC. Core-only (or empty) → CORE.
+        selected_list = [
+            p.strip() for p in selected_params.split(",") if p.strip()
+        ] if selected_params else []
+        core_bases = {"PRES", "TEMP", "PSAL"}
+        file_type = "BGC" if any(p.upper() not in core_bases for p in selected_list) else "CORE"
+
         # 2. Write to DB
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
@@ -46,12 +54,18 @@ class ProcessService:
 
             # Insert into files table
             file_id = self.db.insert_file_record(
-                cursor, project_id, file.filename, metadata, file_size_bytes
+                cursor, project_id, file.filename, metadata, file_size_bytes,
+                file_type=file_type,
             )
 
             profiles_inserted = 0
             measurements_inserted = 0
-            param_counts = {}
+            param_counts: dict[str, int] = {}
+
+            # Suffixes that may appear in extras for any base parameter.
+            # Used to tally one count per measurement per base (not per suffix key).
+            extras_suffixes = ("", "_QC", "_ADJUSTED", "_ADJUSTED_QC", "_ADJUSTED_ERROR")
+            selected_bases = [p.upper() for p in selected_list]
 
             # Insert into profiles and measurements tables
             for profile in profiles:
@@ -64,15 +78,20 @@ class ProcessService:
                 ]
                 self.db.insert_measurements_batch(cursor, measurements)
                 measurements_inserted += len(measurements)
-            
-                # Tally up extra parameters inserted
+
+                # Tally one count per measurement that has any non-None value
+                # for a given base parameter (DOXY), not per individual suffix key.
                 for m in measurements:
-                    extras = m.get("extras", {})
-                    for key, val in extras.items():
-                        if val is not None:
-                            param_counts[key] = param_counts.get(key, 0) + 1
-            
-            # Insert extras parameters if any
+                    extras = m.get("extras", {}) or {}
+                    for base in selected_bases:
+                        has_value = any(
+                            extras.get(f"{base}{suffix}") is not None
+                            for suffix in extras_suffixes
+                        )
+                        if has_value:
+                            param_counts[base] = param_counts.get(base, 0) + 1
+
+            # Upsert extras parameter catalog for the project
             if param_counts:
                 self.db.upsert_project_parameters(cursor, project_id, param_counts)
 

@@ -79,6 +79,7 @@ def extract_profile_header(row: pd.Series) -> dict:
     return {
         "cycle_number": safe_int(row.get("cycle_number")),
         "direction": safe_str(row.get("direction")),
+        "data_mode": safe_str(row.get("data_mode")),
         "latitude": safe_float(row.get("latitude")),
         "longitude": safe_float(row.get("longitude")),
         "position_qc": safe_int_from_bytes(row.get("position_qc")),
@@ -103,6 +104,7 @@ def extract_measurements(group: pd.DataFrame, selected_extras: list[str]) -> lis
 
         extras_dict = {}
         for ext in selected_extras:
+            ext_upper = ext.upper()
             ext_lower = ext.lower()
             suffixes = ["", "_qc", "_adjusted", "_adjusted_qc"]
             for suffix in suffixes:
@@ -114,7 +116,7 @@ def extract_measurements(group: pd.DataFrame, selected_extras: list[str]) -> lis
                     else:
                         val = safe_float(val)
                     if val is not None:
-                        key_name = f"{ext}{suffix.upper()}"
+                        key_name = f"{ext_upper}{suffix.upper()}"
                         extras_dict[key_name] = val
 
         rows.append(
