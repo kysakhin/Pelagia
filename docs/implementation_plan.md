@@ -1027,43 +1027,37 @@ Wrap `ChartRenderer` in a React error boundary to prevent chart rendering errors
 
 ```
 - [ x ] Switch config.py + chatbot.py to OpenRouter (with timeout + retry)
-2.2  Rewrite sql_prompt.md — add flat extras JSONB docs, project_parameters catalog,
-     dynamic param injection, keep existing core query docs
-2.3  Update run_sql_query to return a runtime result_id + column metadata + small
-     model sample, while storing display-limited rows server-side
-2.4  Add ChartPayloadService / result store — validate chart specs against result
-     columns and compose { spec, data, meta } outside the agent frame
-2.5  Add structured chart_spec output. Prefer plain structured JSON first; optionally
-     use a create_visualization_spec tool if Agno tool calls are more reliable.
-     Do not create a render_chart tool.
-2.6  Update chatbot.py — extract chart_spec from structured output/tool result,
-     inject available params from project_parameters into system prompt, compose
-     chart_payload when a chart_spec is valid
-2.7  TEST SUITE (at least 10 queries):
-     - "what is the average temperature" → uses typed column directly (no JSONB)
-     - "show me temperature vs depth" → SQL result_id + scatter chart_spec + chart_payload
-     - "how many profiles are in my project" → count query
-     - "what parameters are available" → queries project_parameters table
-     - "plot dissolved oxygen vs depth" → extras JSONB query + result_id + chart_payload
-     - "show me salinity at 500m" → pressure range filter (typed column)
-     - "what files have been uploaded" → files table query
-     - "compare temperature and salinity" → T-S scatter chart (typed columns)
-     - "distribution of temperature" → histogram chart_spec
-     - Edge case: chart_spec references unknown column → backend rejects chart, keeps summary/table
-     - Edge case: ask about a parameter that doesn't exist → graceful message
+- [ x ] 2.2  Rewrite sql_prompt.md — add flat extras JSONB docs, project_parameters catalog,
+           dynamic param injection, keep existing core query docs
+- [ x ] 2.3  Update run_sql_query to return a runtime result_id + column metadata + small
+           model sample, while storing display-limited rows server-side
+- [ x ] 2.4  Add ChartPayloadService / result store — validate chart specs against result
+           columns and compose { spec, data, meta } outside the agent frame
+- [ x ] 2.5  Add structured chart_spec output. Prefer plain structured JSON first; optionally
+           use a create_visualization_spec tool if Agno tool calls are more reliable.
+           Do not create a render_chart tool.
+- [ x ] 2.6  Update chatbot.py — extract chart_spec from structured output/tool result,
+           inject available params from project_parameters into system prompt, compose
+           chart_payload when a chart_spec is valid
+- [ x ] 2.7  TEST SUITE (59 tests in tests/test_phase2.py):
+           JSONB validation (8), SQL cleaning + LIMIT cap (6), ResultStore (4),
+           ChartPayloadService (10), build_columns (4), run_sql_query tool (5),
+           create_visualization_spec tool (3), extract_tool_* helpers (3),
+           prompt injection (4), run_sql_agent orchestration (4), file_type detection (3),
+           transaction rollback (1), NeondbService inserts (2), processor extras (2)
 ```
 
 ### Phase 3 — Frontend Plumbing
 
 ```
-3.1  Install drizzle-orm, create schema.ts, drizzle.config.ts
-3.2  Run drizzle-kit push to verify schema matches
-3.3  Create lib/db/index.ts with Drizzle client
-3.4  Migrate server actions to Drizzle (projects.ts, user.ts)
-3.5  Create conversations.ts server actions (with auth enforcement)
-3.6  Add chat response/message types for chart_spec, chart_payload, and sql_data preview
-3.7  Build ChartRenderer.tsx with error boundary, reading spec.encoding fields
-3.8  Test ChartRenderer with mock chart_payloads for each supported chart type
+- [ x ] 3.1  Install drizzle-orm, create schema.ts, drizzle.config.ts
+- [ x ] 3.2  Run drizzle-kit push to verify schema matches
+- [ x ] 3.3  Create lib/db/index.ts with Drizzle client
+- [ x ] 3.4  Migrate server actions to Drizzle (projects.ts, user.ts)
+- [ x ] 3.5  Create conversations.ts server actions (with auth enforcement)
+- [ x ] 3.6  Add chat response/message types for chart_spec, chart_payload, and sql_data preview
+- [ x ] 3.7  Build ChartRenderer.tsx with error boundary, reading spec.encoding fields
+- [ x ] 3.8  Test ChartRenderer with mock chart_payloads for each supported chart type
 ```
 
 ### Phase 4 — UI Overhaul (incremental, old UI stays functional)

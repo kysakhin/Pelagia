@@ -1,14 +1,16 @@
 "use server";
 
 import { currentUser } from "@clerk/nextjs/server";
-import { sql } from "@/lib/db";
+import { db } from "@/lib/db";
+import { projects } from "@/lib/db/schema";
+import { desc, eq } from "drizzle-orm";
 
 export interface Project {
   project_id: number;
   project_name: string;
   description: string | null;
   pi_name: string | null;
-  created_at: string;
+  created_at: Date | null;
 }
 
 /**
@@ -18,12 +20,17 @@ export async function getUserProjects(): Promise<Project[]> {
   const user = await currentUser();
   if (!user) throw new Error("Not authenticated");
 
-  const rows = await sql`
-    SELECT project_id, project_name, description, pi_name, created_at
-    FROM projects
-    WHERE user_id = ${user.id}
-    ORDER BY created_at DESC
-  `;
+  const rows = await db
+    .select({
+      project_id: projects.projectId,
+      project_name: projects.projectName,
+      description: projects.description,
+      pi_name: projects.piName,
+      created_at: projects.createdAt,
+    })
+    .from(projects)
+    .where(eq(projects.userId, user.id))
+    .orderBy(desc(projects.createdAt));
 
   return rows as Project[];
 }
@@ -39,11 +46,21 @@ export async function createProject(
   const user = await currentUser();
   if (!user) throw new Error("Not authenticated");
 
-  const [project] = await sql`
-    INSERT INTO projects (user_id, project_name, description, pi_name)
-    VALUES (${user.id}, ${projectName}, ${description ?? null}, ${piName ?? null})
-    RETURNING project_id, project_name, description, pi_name, created_at
-  `;
+  const [project] = await db
+    .insert(projects)
+    .values({
+      userId: user.id,
+      projectName,
+      description: description ?? null,
+      piName: piName ?? null,
+    })
+    .returning({
+      project_id: projects.projectId,
+      project_name: projects.projectName,
+      description: projects.description,
+      pi_name: projects.piName,
+      created_at: projects.createdAt,
+    });
 
   return project as Project;
 }

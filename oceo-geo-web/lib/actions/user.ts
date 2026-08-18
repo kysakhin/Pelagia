@@ -1,7 +1,9 @@
 "use server";
 
 import { currentUser } from "@clerk/nextjs/server";
-import { sql } from "@/lib/db";
+import { db } from "@/lib/db";
+import { users } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 
 /**
  * Upserts the currently signed-in Clerk user into the `users` table.
@@ -14,13 +16,20 @@ export async function syncUser() {
   const email = user.emailAddresses[0]?.emailAddress;
   if (!email) return null;
 
-  await sql`
-    INSERT INTO users (user_id, email, full_name)
-    VALUES (${user.id}, ${email}, ${user.fullName ?? null})
-    ON CONFLICT (user_id) DO UPDATE SET
-      email      = EXCLUDED.email,
-      full_name  = EXCLUDED.full_name
-  `;
+  await db
+    .insert(users)
+    .values({
+      userId: user.id,
+      email,
+      fullName: user.fullName ?? null,
+    })
+    .onConflictDoUpdate({
+      target: users.userId,
+      set: {
+        email,
+        fullName: user.fullName ?? null,
+      },
+    });
 
   return { userId: user.id };
 }

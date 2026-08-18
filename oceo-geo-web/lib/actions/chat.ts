@@ -1,13 +1,24 @@
 "use server";
 
 import { auth } from "@clerk/nextjs/server";
+import type {
+  ChartPayload,
+  ChartSpec,
+  ColumnMeta,
+} from "@/types";
 
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   intent?: "SQL" | "DOMAIN" | "OFF_TOPIC" | "ERROR" | "CONTEXT";
-  data?: Record<string, unknown>[];
   query?: string;
+  // SQL-intent fields
+  data?: Record<string, unknown>[];   // display/message-preview-limited rows
+  resultId?: string;                  // runtime SQL result handle
+  columns?: ColumnMeta[];             // SQL result column metadata
+  rowCount?: number;                  // total rows returned by SQL
+  chartSpec?: ChartSpec | null;       // raw spec from create_visualization_spec
+  chartPayload?: ChartPayload | null; // validated { spec, data, meta } or null
 }
 
 export interface SendMessageResult {
@@ -15,7 +26,13 @@ export interface SendMessageResult {
   response?: string;
   summary?: string;
   query?: string;
+  // SQL-intent fields (new in Phase 2 — see implementation_plan.md §3.3)
   data?: Record<string, unknown>[];
+  result_id?: string;
+  columns?: ColumnMeta[];
+  row_count?: number;
+  chart_spec?: ChartSpec | null;
+  chart_payload?: ChartPayload | null;
 }
 
 export async function sendChatMessage(
