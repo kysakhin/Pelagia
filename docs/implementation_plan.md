@@ -1063,18 +1063,18 @@ Wrap `ChartRenderer` in a React error boundary to prevent chart rendering errors
 ### Phase 4 — UI Overhaul (incremental, old UI stays functional)
 
 ```
-4.1  Build ChatLayout component (sidebar + chat area shell)
-4.2  Build ConversationSidebar (conversation list + new chat button)
-4.3  Build ChatView (chat interface with ChartRenderer integration)
-4.4  Create /p/[projectId] route → renders ChatLayout
-4.5  Create /p/[projectId]/c/[convId] route → loads specific conversation
-4.6  Wire up message persistence (save + load + pagination)
-4.7  Add file upload access from sidebar
-4.8  Build ProjectPicker component
-4.9  Update homepage (/) to show ProjectPicker for signed-in users,
-     linking to /p/[projectId] routes
+- [ x ] 4.1  Build ChatLayout component (sidebar + chat area shell)
+- [ x ] 4.2  Build ConversationSidebar (conversation list + new chat button)
+- [ x ] 4.3  Build ChatView (chat interface with ChartRenderer integration)
+- [ x ] 4.4  Create /p/[projectId] route → renders ChatLayout
+- [ x ] 4.5  Create /p/[projectId]/c/[convId] route → loads specific conversation
+- [ x ] 4.6  Wire up message persistence (save + load + pagination)
+- [ x ] 4.7  Add file upload access from sidebar
+- [ x ] 4.8  Build ProjectPicker component
+- [ x ] 4.9  Update homepage (/) to show ProjectPicker for signed-in users,
+      linking to /p/[projectId] routes
 4.10 End-to-end test: project selection → new conversation → ask question
-     → see chart → switch conversations → see history
+      → see chart → switch conversations → see history
 4.11 ONLY AFTER 4.10 PASSES: redirect /projects/[id] → /p/[id] (optional)
 ```
 

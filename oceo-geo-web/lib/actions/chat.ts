@@ -6,6 +6,12 @@ import type {
   ChartSpec,
   ColumnMeta,
 } from "@/types";
+import {
+  addMessage,
+  createConversation,
+  getMessagesPaginated,
+  updateConversationTitle,
+} from "@/lib/actions/conversations";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -65,4 +71,155 @@ export async function sendChatMessage(
   const json = await res.json();
   // Backend wraps the result in { response: { intent, ... } }
   return json.response as SendMessageResult;
+}
+
+// ── Persisted send flow ─────────────────────────────────────────────────────
+// Orchestrates the full chat round-trip with message persistence:
+//   1. Create conversation if no conversationId is provided (auto-title from
+//      the first user message, truncated to ~50 chars).
+//   2. Save the user message to the messages table.
+//   3. Call the backend AI (sendChatMessage).
+//   4. Save the assistant response with intent, sql_query, sql_data (display-
+//      limited rows), and chart_spec.
+//   5. Return the backend result plus the conversationId and saved message
+//      ids so the client can update its URL and message keys.
+//
+// See implementation_plan.md §5.5.
+
+export interface SendPersistedResult extends SendMessageResult {
+  conversation_id: number;
+  user_message_id: number;
+  assistant_message_id: number;
+  created_conversation: boolean;
+}
+
+export async function sendChatMessagePersisted(
+  message: string,
+  projectId: number,
+  conversationId?: number
+): Promise<SendPersistedResult> {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Not authenticated");
+
+  let convId = conversationId;
+  let createdConversation = false;
+
+  // 1. Create conversation if none provided. Auto-title from the message.
+  if (convId === undefined) {
+    const title = message.trim().slice(0, 50) || "New conversation";
+    const conv = await createConversation(projectId, title);
+    convId = conv.conversationId;
+    createdConversation = true;
+  }
+
+  // 2. Save the user message.
+  const [userMessage] = await Promise.all([
+    addMessage(convId, { role: "user", content: message }),
+  ]);
+
+  // 3. Call the backend AI.
+  const result = await sendChatMessage(message, projectId);
+
+  // 4. Save the assistant response. Persist the chart data rows as sql_data
+  //    so historical charts can re-render without re-querying. Prefer the
+  //    chart_payload's data (validated) and fall back to the raw SQL rows.
+  const sqlData = result.chart_payload?.data ?? result.data ?? [];
+  const chartSpec = result.chart_spec ?? result.chart_payload?.spec ?? null;
+
+  const assistantMessage = await addMessage(convId, {
+    role: "assistant",
+    content: result.summary ?? result.response ?? "",
+    intent: result.intent,
+    sqlQuery: result.query,
+    sqlData,
+    chartSpec,
+  });
+
+  // 5. If we created the conversation, the title was already set from the
+  //    first message. For existing conversations, leave the title as-is
+  //    (it was set when the conversation was created).
+  //    Note: Phase 5.2 may add smarter title generation.
+
+  return {
+    ...result,
+    conversation_id: convId,
+    user_message_id: userMessage.messageId,
+    assistant_message_id: assistantMessage.messageId,
+    created_conversation: createdConversation,
+  };
+}
+
+// ── Historical message loading ──────────────────────────────────────────────
+
+export interface PersistedMessage {
+  message_id: number;
+  role: "user" | "assistant" | "system";
+  content: string;
+  intent?: string;
+  sql_query?: string;
+  sql_data?: Record<string, unknown>[];
+  chart_spec?: ChartSpec | null;
+  created_at: Date;
+  // Reconstructed for the frontend: a chart_payload built from chart_spec +
+  // sql_data so historical charts render without a runtime result_id.
+  chart_payload?: ChartPayload | null;
+}
+
+export interface LoadMessagesResult {
+  messages: PersistedMessage[];
+  has_more: boolean;
+}
+
+/**
+ * Loads a paginated page of messages for a conversation and reconstructs
+ * historical chart_payloads from the persisted chart_spec + sql_data.
+ */
+export async function loadConversationMessages(
+  conversationId: number,
+  limit = 50,
+  beforeMessageId?: number
+): Promise<LoadMessagesResult> {
+  const page = await getMessagesPaginated(
+    conversationId,
+    limit,
+    beforeMessageId
+  );
+
+  const messages: PersistedMessage[] = page.messages.map((row) => {
+    const sqlData = (row.sqlData as Record<string, unknown>[] | null) ?? undefined;
+    const chartSpec = (row.chartSpec as ChartSpec | null) ?? null;
+
+    // Reconstruct a chart_payload for historical rendering per §4.2.
+    // The runtime result_id is long gone, but the spec + data are enough
+    // for the frontend ChartRenderer.
+    let chartPayload: ChartPayload | null = null;
+    if (chartSpec && sqlData && sqlData.length > 0) {
+      chartPayload = {
+        spec: chartSpec,
+        data: sqlData,
+        meta: {
+          row_count: sqlData.length,
+          displayed_row_count: sqlData.length,
+          truncated: false,
+        },
+      };
+    }
+
+    return {
+      message_id: row.messageId,
+      role: row.role as "user" | "assistant" | "system",
+      content: row.content ?? "",
+      intent: row.intent ?? undefined,
+      sql_query: row.sqlQuery ?? undefined,
+      sql_data: sqlData,
+      chart_spec: chartSpec,
+      created_at: row.createdAt ?? new Date(),
+      chart_payload: chartPayload,
+    };
+  });
+
+  return {
+    messages,
+    has_more: page.hasMore,
+  };
 }

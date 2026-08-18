@@ -3,7 +3,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { conversations, messages, projects } from "@/lib/db/schema";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 
 // ── Conversations ───────────────────────────────────────────────────────────
 
@@ -36,6 +36,34 @@ export async function getConversations(projectId: number) {
       )
     )
     .orderBy(desc(conversations.updatedAt));
+}
+
+/**
+ * Returns a single conversation, verifying both project and conversation
+ * ownership. Throws if not found or access denied.
+ */
+export async function getConversation(
+  projectId: number,
+  conversationId: number
+) {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Not authenticated");
+
+  const [row] = await db
+    .select()
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.conversationId, conversationId),
+        eq(conversations.projectId, projectId),
+        eq(conversations.userId, userId)
+      )
+    )
+    .limit(1);
+
+  if (!row) throw new Error("Conversation not found or access denied");
+
+  return row;
 }
 
 /**
@@ -129,6 +157,73 @@ export async function getMessages(conversationId: number) {
     .from(messages)
     .where(eq(messages.conversationId, conversationId))
     .orderBy(messages.createdAt);
+}
+
+/**
+ * Returns messages for a conversation with cursor-based pagination.
+ *
+ * By default returns the latest `limit` messages (ordered oldest → newest).
+ * Pass `beforeMessageId` to load the page of messages older than that id
+ * (used for "load more" on scroll-up).
+ *
+ * Verifies conversation ownership before returning messages.
+ */
+export async function getMessagesPaginated(
+  conversationId: number,
+  limit = 50,
+  beforeMessageId?: number
+) {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Not authenticated");
+
+  // Verify ownership via the conversation's user_id.
+  const [conversation] = await db
+    .select({ conversationId: conversations.conversationId })
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.conversationId, conversationId),
+        eq(conversations.userId, userId)
+      )
+    )
+    .limit(1);
+
+  if (!conversation) throw new Error("Conversation not found or access denied");
+
+  // Fetch a page of messages. When loading older messages, we query for
+  // messages with id < beforeMessageId ordered descending, then reverse
+  // the result so the caller receives them in chronological order.
+  if (beforeMessageId !== undefined) {
+    const page = await db
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, conversationId),
+          lt(messages.messageId, beforeMessageId)
+        )
+      )
+      .orderBy(desc(messages.messageId))
+      .limit(limit);
+
+    return {
+      messages: page.reverse(),
+      hasMore: page.length === limit,
+    };
+  }
+
+  // Latest page: newest `limit` messages, reversed to chronological order.
+  const page = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.conversationId, conversationId))
+    .orderBy(desc(messages.messageId))
+    .limit(limit);
+
+  return {
+    messages: page.reverse(),
+    hasMore: page.length === limit,
+  };
 }
 
 /**

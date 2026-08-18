@@ -3,7 +3,7 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { projects } from "@/lib/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 export interface Project {
   project_id: number;
@@ -33,6 +33,31 @@ export async function getUserProjects(): Promise<Project[]> {
     .orderBy(desc(projects.createdAt));
 
   return rows as Project[];
+}
+
+/**
+ * Returns a single project owned by the current user.
+ * Throws if the project doesn't exist or doesn't belong to the user.
+ */
+export async function getProject(projectId: number): Promise<Project> {
+  const user = await currentUser();
+  if (!user) throw new Error("Not authenticated");
+
+  const [row] = await db
+    .select({
+      project_id: projects.projectId,
+      project_name: projects.projectName,
+      description: projects.description,
+      pi_name: projects.piName,
+      created_at: projects.createdAt,
+    })
+    .from(projects)
+    .where(and(eq(projects.projectId, projectId), eq(projects.userId, user.id)))
+    .limit(1);
+
+  if (!row) throw new Error("Project not found or access denied");
+
+  return row as Project;
 }
 
 /**
