@@ -30,9 +30,6 @@ SQL
 User: "Show me measurements where salinity exceeds 35 PSU"
 SQL
 
-User: "Show me measurements where salinity exceeds 35 PSU"
-SQL
-
 User: "What do these temperature and salinity and pressure values mean?"
 CONTEXT
 

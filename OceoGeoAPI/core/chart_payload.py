@@ -159,8 +159,10 @@ GLOBAL_RESULT_STORE = ResultStore()
 # ---------------------------------------------------------------------------
 
 _ALLOWED_CHART_TYPES = {
-    "scatter", "line", "bar", "histogram", "heatmap", "pie", "area", "boxplot",
+    "scatter", "line", "bar", "histogram", "pie", "area",
 }
+# "heatmap" and "boxplot" are Phase 5 stubs — excluded here so the agent can
+# never emit them and trigger an error boundary on the frontend.
 
 # Encoding fields that must reference real column ids from the result.
 _ENCODING_FIELDS = ("x", "y", "z", "color", "series")
@@ -180,10 +182,12 @@ class ChartPayloadService:
       3. `title` must be a non-empty string.
       4. Every value in `encoding` (x, y, z, color, series) that is set must
          match a column id from the result metadata.
-      5. Scatter / line / bar / histogram / area / boxplot require `encoding.x`
+      5. Scatter / line / bar / histogram / area require `encoding.x`
          and `encoding.y` (histogram may use only `x`).
-      6. Heatmap requires `encoding.x`, `encoding.y`, and `encoding.z`.
-      7. Pie requires `encoding.color` (category) and `encoding.y` (value).
+      6. Pie requires `encoding.color` (category) and `encoding.y` (value).
+
+    Note: heatmap and boxplot are Phase 5 stubs; they are not in
+    _ALLOWED_CHART_TYPES and will raise ChartSpecError if requested.
 
     If validation fails, `build` raises `ChartSpecError`. Callers should catch
     it and degrade gracefully (return the table + summary without a chart).
@@ -231,6 +235,12 @@ class ChartPayloadService:
         if not isinstance(encoding, dict):
             raise ChartSpecError("chart_spec.encoding must be a JSON object")
 
+        if chart_type == "histogram" and encoding.get("y"):
+            # Models often set y="count" for histograms, but count is derived
+            # by the frontend binning step, not a SQL result column.
+            chart_spec = {**chart_spec, "encoding": {**encoding, "y": None}}
+            encoding = chart_spec["encoding"]
+
         column_ids = {col["id"] for col in result["columns"]}
         for field_name in _ENCODING_FIELDS:
             value = encoding.get(field_name)
@@ -271,11 +281,6 @@ class ChartPayloadService:
         if chart_type == "histogram":
             if not x:
                 raise ChartSpecError("histogram requires encoding.x")
-        elif chart_type == "heatmap":
-            if not (x and y and z):
-                raise ChartSpecError(
-                    "heatmap requires encoding.x, encoding.y, encoding.z"
-                )
         elif chart_type == "pie":
             if not (color and y):
                 raise ChartSpecError(

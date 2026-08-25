@@ -2,7 +2,13 @@ import os
 import logging
 
 from services.NeondbService import NeonDBService
-from core.chatbot import classify_intent, run_sql_agent, run_domain_agent, run_context_agent
+from core.chatbot import (
+    SQLAgentNoQueryError,
+    classify_intent,
+    run_sql_agent,
+    run_domain_agent,
+    run_context_agent,
+)
 
 from agno.exceptions import ModelProviderError
 
@@ -49,9 +55,9 @@ class ChatService:
 
         try:
             intent = classify_intent(message, intent_prompt_with_hint)
-        except Exception:
+        except Exception as exc:
             logger.exception("Intent classification failed")
-            intent = "OFF_TOPIC"
+            return self._ai_error_response(exc)
 
         if intent == "SQL":
             try:
@@ -108,6 +114,11 @@ class ChatService:
                     "intent": "ERROR",
                     "response": "The AI service is currently rate limited. Please try again later.",
                 }
+        if isinstance(exc, SQLAgentNoQueryError):
+            return {
+                "intent": "ERROR",
+                "response": str(exc),
+            }
         return {
             "intent": "ERROR",
             "response": "Sorry, I encountered an error. Please try again.",

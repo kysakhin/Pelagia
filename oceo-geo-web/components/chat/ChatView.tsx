@@ -270,8 +270,17 @@ export default function ChatView({
         ...result.messages.map(persistedToViewMessage),
         ...prev,
       ]);
-    } catch {
-      // Silently ignore — user can retry.
+    } catch (err) {
+      const errorMsg: ChatViewMessage = {
+        id: generateId(),
+        role: "assistant",
+        content:
+          err instanceof Error
+            ? `Could not load earlier messages: ${err.message}`
+            : "Could not load earlier messages. Please try again.",
+        error: true,
+      };
+      setMessages((prev) => [errorMsg, ...prev]);
     } finally {
       setLoadingMore(false);
     }

@@ -156,7 +156,7 @@ class NeonDBService:
                     m.get("salinity_qc"),
                     m.get("salinity_adjusted"),
                     m.get("salinity_adjusted_qc"),
-                    psycopg2.extras.Json(m.get("extras", {})),
+                    psycopg2.extras.Json(m["extras"]) if m.get("extras") is not None else None,
                 )
                 for m in measurements
             ],

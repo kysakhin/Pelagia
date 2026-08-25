@@ -28,6 +28,187 @@ logger = logging.getLogger(__name__)
 # in the chat response.
 _MESSAGE_PREVIEW_LIMIT = 100
 
+# Reasoning models (e.g. openai/gpt-oss-*) spend completion tokens thinking
+# before emitting content; undersized budgets truncate mid-reasoning and yield
+# empty content. Every agent therefore gets generous headroom.
+_INTENT_MAX_TOKENS = 300
+_SQL_AGENT_MAX_TOKENS = 1500
+_SUMMARY_MAX_TOKENS = 1000
+
+
+class SQLAgentNoQueryError(RuntimeError):
+    """Raised when the SQL agent does not produce an executable query."""
+
+
+def _infer_chart_spec(message: str, result_id: str | None, columns: list[dict]) -> dict | None:
+    """Best-effort chart spec fallback when the model ran SQL but skipped viz."""
+    if not result_id:
+        return None
+
+    column_ids = [col.get("id") for col in columns if isinstance(col.get("id"), str)]
+    column_set = set(column_ids)
+    msg = message.lower()
+
+    def first_available(candidates: tuple[str, ...]) -> str | None:
+        for candidate in candidates:
+            if candidate in column_set:
+                return candidate
+        return None
+
+    if "histogram" in msg or "distribution" in msg:
+        x = first_available(("salinity", "temperature", "pressure")) or (column_ids[0] if column_ids else None)
+        if x:
+            return {
+                "result_id": result_id,
+                "chart_type": "histogram",
+                "title": f"Distribution of {x.replace('_', ' ').title()}",
+                "encoding": {"x": x},
+            }
+
+    if "scatter" in msg or " vs " in msg:
+        if {"temperature", "salinity"}.issubset(column_set):
+            return {
+                "result_id": result_id,
+                "chart_type": "scatter",
+                "title": "Salinity vs Temperature",
+                "encoding": {"x": "temperature", "y": "salinity"},
+                "labels": {"x": "Temperature (°C)", "y": "Salinity (PSU)"},
+            }
+
+    if "line" in msg or "separate line" in msg:
+        x = first_available(("pressure", "observed_at", "observation_date"))
+        y = first_available(("temperature", "avg_temperature", "salinity", "avg_salinity"))
+        series = first_available(("cycle_number", "profile_id", "data_mode"))
+        if x and y:
+            spec = {
+                "result_id": result_id,
+                "chart_type": "line",
+                "title": f"{y.replace('_', ' ').title()} vs {x.replace('_', ' ').title()}",
+                "encoding": {"x": x, "y": y},
+            }
+            if series:
+                spec["encoding"]["series"] = series
+                spec["options"] = {"show_legend": True}
+            if x == "pressure":
+                spec["options"] = {**spec.get("options", {}), "invert_y": False}
+            return spec
+
+    if "bar" in msg:
+        x = first_available(("data_mode", "file_type", "cycle_number")) or (column_ids[0] if column_ids else None)
+        y = first_available(("profile_count", "measurement_count", "count")) or (column_ids[1] if len(column_ids) > 1 else None)
+        if x and y:
+            return {
+                "result_id": result_id,
+                "chart_type": "bar",
+                "title": f"{y.replace('_', ' ').title()} by {x.replace('_', ' ').title()}",
+                "encoding": {"x": x, "y": y},
+            }
+
+    if "pie" in msg:
+        color = first_available(("data_mode", "file_type", "cycle_number")) or (column_ids[0] if column_ids else None)
+        y = first_available(("profile_count", "measurement_count", "count")) or (column_ids[1] if len(column_ids) > 1 else None)
+        if color and y:
+            return {
+                "result_id": result_id,
+                "chart_type": "pie",
+                "title": f"{y.replace('_', ' ').title()} by {color.replace('_', ' ').title()}",
+                "encoding": {"color": color, "y": y},
+            }
+
+    if "area" in msg:
+        x = first_available(("observed_at", "observation_date", "pressure")) or (column_ids[0] if column_ids else None)
+        y = first_available(("avg_salinity", "salinity", "avg_temperature", "temperature")) or (column_ids[1] if len(column_ids) > 1 else None)
+        if x and y:
+            return {
+                "result_id": result_id,
+                "chart_type": "area",
+                "title": f"{y.replace('_', ' ').title()} by {x.replace('_', ' ').title()}",
+                "encoding": {"x": x, "y": y},
+            }
+
+    return None
+
+
+def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
+    """Pull the SQL tool result, raw-SQL fallback, and query text out of a
+    single agent response.
+
+    Returns a dict with keys: query, data, result_id, columns, row_count,
+    sql_error, sql_result, content.
+    """
+    content = (response.content or "").strip()
+
+    sql_result = extract_tool_result(response, "run_sql_query")
+
+    query = ""
+    data: list[dict] = []
+    result_id = None
+    columns: list[dict] = []
+    row_count = 0
+    sql_error = None
+
+    if sql_result:
+        if "error" in sql_result:
+            sql_error = sql_result["error"]
+        else:
+            result_id = sql_result.get("result_id")
+            columns = sql_result.get("columns", [])
+            row_count = sql_result.get("row_count", 0)
+            if result_id:
+                stored = store.get(result_id)
+                if stored:
+                    data = stored["rows"][:_MESSAGE_PREVIEW_LIMIT]
+
+    # No tool call happened — the agent may have returned raw SQL as text.
+    if sql_result is None:
+        if content and not content.startswith("{") and not content.startswith("```"):
+            first_word = (
+                content.lstrip("( \t\n").split()[0].upper()
+                if content.strip() else ""
+            )
+            if first_word in ("SELECT", "WITH"):
+                logger.warning(
+                    "SQL agent returned raw SQL without a tool call; "
+                    "executing fallback path"
+                )
+                tool_result_str = (
+                    sql_tool.entrypoint(query=content)
+                    if hasattr(sql_tool, "entrypoint") else None
+                )
+                if tool_result_str:
+                    try:
+                        sql_result = json.loads(tool_result_str)
+                    except (json.JSONDecodeError, TypeError):
+                        sql_result = None
+                    if sql_result and "error" in sql_result:
+                        sql_error = sql_result["error"]
+                    elif sql_result:
+                        result_id = sql_result.get("result_id")
+                        columns = sql_result.get("columns", [])
+                        row_count = sql_result.get("row_count", 0)
+                        if result_id:
+                            stored = store.get(result_id)
+                            if stored:
+                                data = stored["rows"][:_MESSAGE_PREVIEW_LIMIT]
+                query = content
+
+    # Recover query text from tool_args if we still don't have it.
+    if not query:
+        args = extract_tool_args(response, "run_sql_query")
+        if args and isinstance(args.get("query"), str):
+            query = args["query"]
+
+    return {
+        "query": query,
+        "data": data,
+        "result_id": result_id,
+        "columns": columns,
+        "row_count": row_count,
+        "sql_error": sql_error,
+        "sql_result": sql_result,
+        "content": content,
+    }
+
 
 def make_openrouter_model(max_tokens: int) -> OpenRouter:
     return OpenRouter(
@@ -45,21 +226,28 @@ def classify_intent(message: str, system_message: str) -> str:
     """Use a lightweight agent to classify the user message as
     SQL, DOMAIN, CONTEXT, or OFF_TOPIC."""
     agent = Agent(
-        model=make_openrouter_model(10),
+        model=make_openrouter_model(_INTENT_MAX_TOKENS),
         system_message=system_message,
         markdown=False,
     )
     response = agent.run(message)
     raw = (response.content or "").strip().upper()
+    raw = raw.replace("-", "_").replace(" ", "_")
 
     for label in ("SQL", "CONTEXT", "DOMAIN", "OFF_TOPIC"):
         if label in raw:
             return label
-    return "OFF_TOPIC"
+    raise ValueError(f"Intent classifier returned unparseable output: {raw!r}")
 
 
-def _format_available_params(params: list[str]) -> str:
+def _format_available_params(params: list[str] | None) -> str:
     """Render the {available_params} placeholder value for sql_prompt.md."""
+    if params is None:
+        # Fetch failed — tell the model we couldn't determine the list.
+        return (
+            "unknown (could not load project parameters; "
+            "avoid extras->>'...' accessors unless the user explicitly named a BGC parameter)"
+        )
     if not params:
         return (
             "none (this project has no BGC / extras parameters; "
@@ -68,7 +256,7 @@ def _format_available_params(params: list[str]) -> str:
     return ", ".join(params)
 
 
-def _inject_available_params(system_message: str, params: list[str]) -> str:
+def _inject_available_params(system_message: str, params: list[str] | None) -> str:
     """Replace the {available_params} placeholder in the SQL prompt with the
     project's current extras parameter list."""
     return system_message.replace(
@@ -104,11 +292,16 @@ def run_sql_agent(
     chart_service = chart_payload_service or ChartPayloadService(store)
 
     # ── 1. Inject available extras parameters into the system prompt ────────
+    available_params: list[str] | None
     try:
         available_params = db.get_project_parameters(project_id)
     except Exception:
-        logger.exception("Failed to fetch project_parameters; assuming none")
-        available_params = []
+        logger.exception(
+            "Failed to fetch project_parameters for project %s; "
+            "JSONB key validation will be skipped for this request",
+            project_id,
+        )
+        available_params = None  # None = unknown; skip validation rather than false-reject
     system_message_injected = _inject_available_params(
         system_message, available_params
     )
@@ -122,72 +315,47 @@ def run_sql_agent(
     viz_tool = create_visualization_spec_tool()
 
     agent = Agent(
-        model=make_openrouter_model(500),
+        model=make_openrouter_model(_SQL_AGENT_MAX_TOKENS),
         system_message=system_message_injected,
         tools=[sql_tool, viz_tool],
         markdown=False,
     )
 
-    response = agent.run(message)
-    content = (response.content or "").strip()
+    last_response = agent.run(message)
+    outcome = _extract_sql_outcome(last_response, store, sql_tool)
 
-    # ── 3. Extract the SQL tool result (result_id + columns + sample) ───────
-    sql_result = extract_tool_result(response, "run_sql_query")
+    # The model sometimes emits a malformed viz tool call (e.g.
+    # "create_visualization_spec<|channel|>commentary") and never runs SQL.
+    # Give it one structured retry before surfacing an error.
+    if outcome["sql_result"] is None and not outcome["query"]:
+        logger.warning(
+            "SQL agent produced no query on first attempt; retrying once with emphasis"
+        )
+        last_response = agent.run(
+            message
+            + "\n\nIMPORTANT: First call the run_sql_query tool with a single "
+            "SELECT query. Do NOT return SQL as plain text and do NOT call "
+            "create_visualization_spec before running the query."
+        )
+        outcome = _extract_sql_outcome(last_response, store, sql_tool)
 
-    query = ""
-    data: list[dict] = []
-    result_id = None
-    columns: list[dict] = []
-    row_count = 0
-    sql_error = None
+    query = outcome["query"]
+    data = outcome["data"]
+    result_id = outcome["result_id"]
+    columns = outcome["columns"]
+    row_count = outcome["row_count"]
+    sql_error = outcome["sql_error"]
+    content = outcome["content"]
 
-    if sql_result:
-        if "error" in sql_result:
-            sql_error = sql_result["error"]
-            # The query may still be retrievable from tool_args; try below.
-        else:
-            result_id = sql_result.get("result_id")
-            columns = sql_result.get("columns", [])
-            row_count = sql_result.get("row_count", 0)
-            # Pull display-limited rows from the store (not the sample).
-            if result_id:
-                stored = store.get(result_id)
-                if stored:
-                    data = stored["rows"][:_MESSAGE_PREVIEW_LIMIT]
-
-    # Try to recover the query text from tool_args even on error.
-    if sql_result is None:
-        # No tool call happened — the agent may have returned raw SQL as text.
-        # Treat the content as a SQL query and run it manually via the tool fn.
-        if content and not content.startswith("{") and not content.startswith("```"):
-            # Heuristic: looks like SQL if it starts with SELECT/WITH.
-            first_word = content.lstrip("( \t\n").split()[0].upper() \
-                if content.strip() else ""
-            if first_word in ("SELECT", "WITH"):
-                tool_result_str = sql_tool.entrypoint(query=content) \
-                    if hasattr(sql_tool, "entrypoint") else None
-                if tool_result_str:
-                    try:
-                        sql_result = json.loads(tool_result_str)
-                    except (json.JSONDecodeError, TypeError):
-                        sql_result = None
-                    if sql_result and "error" in sql_result:
-                        sql_error = sql_result["error"]
-                    elif sql_result:
-                        result_id = sql_result.get("result_id")
-                        columns = sql_result.get("columns", [])
-                        row_count = sql_result.get("row_count", 0)
-                        if result_id:
-                            stored = store.get(result_id)
-                            if stored:
-                                data = stored["rows"][:_MESSAGE_PREVIEW_LIMIT]
-                query = content
-
-    # Recover query from tool_args if we still don't have it.
-    if not query:
-        args = extract_tool_args(response, "run_sql_query")
-        if args and isinstance(args.get("query"), str):
-            query = args["query"]
+    if outcome["sql_result"] is None and not query:
+        logger.error(
+            "SQL agent produced no run_sql_query tool result and no raw SQL "
+            "after retry. content=%r",
+            content[:500],
+        )
+        raise SQLAgentNoQueryError(
+            "The SQL agent did not produce an executable query. Please try again."
+        )
 
     # ── 4. Surface SQL errors immediately ───────────────────────────────────
     if sql_error:
@@ -204,12 +372,21 @@ def run_sql_agent(
 
     # ── 5. Extract chart_spec from create_visualization_spec tool ───────────
     chart_spec = None
-    viz_result = extract_tool_result(response, "create_visualization_spec")
+    viz_result = extract_tool_result(last_response, "create_visualization_spec")
     if viz_result and viz_result.get("status") == "ok":
         chart_spec = viz_result.get("chart_spec")
     elif viz_result and viz_result.get("status") == "error":
         logger.warning("create_visualization_spec rejected: %s",
                        viz_result.get("error"))
+
+    # ── 5b. Inference fallback: the model described a chart in prose but never
+    # called create_visualization_spec. Derive a conservative spec from the
+    # query wording + result columns so the user still gets their chart.
+    if chart_spec is None and data:
+        inferred = _infer_chart_spec(message, result_id, columns)
+        if inferred:
+            logger.info("Inferred chart_spec from message: %s", inferred)
+            chart_spec = inferred
 
     # ── 6. Compose chart_payload outside the agent frame ────────────────────
     chart_payload = None
@@ -222,10 +399,12 @@ def run_sql_agent(
             # Keep chart_spec in the response for debugging, but no payload.
 
     # ── 7. Generate a natural-language summary of the results ───────────────
-    summary = content
+    first_word = content.lstrip("( \t\n").split()[0].upper() if content.strip() else ""
+    content_is_sql = first_word in ("SELECT", "WITH")
+
     if data:
         summary_agent = Agent(
-            model=make_openrouter_model(500),
+            model=make_openrouter_model(_SUMMARY_MAX_TOKENS),
             system_message=(
                 "You are a helpful oceanographic data analyst. "
                 "Summarize the following SQL query results in clear, concise "
@@ -237,12 +416,26 @@ def run_sql_agent(
             ),
             markdown=True,
         )
-        summary_response = summary_agent.run(
-            f"User question: {message}\n\n"
-            f"Query results (JSON, first {_MESSAGE_PREVIEW_LIMIT} rows):\n"
-            f"{json.dumps(data, default=str)}"
-        )
-        summary = (summary_response.content or content).strip()
+        try:
+            summary_response = summary_agent.run(
+                f"User question: {message}\n\n"
+                f"Query results (JSON, first {_MESSAGE_PREVIEW_LIMIT} rows):\n"
+                f"{json.dumps(data, default=str)}"
+            )
+            summary = (summary_response.content or "").strip() or content
+        except Exception:
+            logger.exception(
+                "Summary agent failed (timeout or model error); "
+                "falling back to row-count summary"
+            )
+            summary = (
+                f"The query returned {row_count} row(s). "
+                "A detailed summary could not be generated — see the table below."
+            )
+    elif not content_is_sql and content.strip():
+        summary = content
+    else:
+        summary = "The query ran successfully but returned no matching rows."
 
     return {
         "query": query,

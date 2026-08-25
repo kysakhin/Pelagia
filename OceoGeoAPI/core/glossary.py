@@ -38,5 +38,43 @@ GLOSSARY = {
         "typical_range": "10 to 200 meters (highly seasonal)",
         "anomaly_note": "Deep mixed layers (>500m) occur in winter in specific high-latitude regions (e.g., Labrador Sea, Weddell Sea) due to intense cooling and convection.",
         "references": ["de Boyer Montégut et al., 2004"]
+    },
+    "doxy": {
+        "unit": "µmol/kg or µmol/L",
+        "physical_meaning": "Dissolved oxygen concentration. It reflects air-sea exchange, photosynthesis, respiration, ventilation, and water-mass age.",
+        "typical_surface_range": "180 to 350 µmol/kg",
+        "typical_deep_range": "20 to 250 µmol/kg depending on basin and oxygen-minimum zones",
+        "anomaly_note": "Near-zero values may indicate oxygen-minimum zones or sensor/processing issues; supersaturated surface values can occur during blooms or strong cooling.",
+        "references": ["BGC-Argo User Manual", "Argo Quality Control Manual"]
+    },
+    "chla": {
+        "unit": "mg/m³",
+        "physical_meaning": "Chlorophyll-a concentration, a proxy for phytoplankton biomass and biological productivity.",
+        "typical_surface_range": "0.01 to 10 mg/m³",
+        "typical_deep_range": "Usually near zero except at deep chlorophyll maxima",
+        "anomaly_note": "Very high spikes can be real bloom signals, non-photochemical quenching effects, fluorescence calibration issues, or particle contamination.",
+        "references": ["BGC-Argo User Manual"]
+    },
+    "bbp": {
+        "unit": "m⁻¹",
+        "physical_meaning": "Particle backscattering coefficient, a proxy for suspended particles and particulate organic carbon.",
+        "typical_open_ocean_range": "~0.0001 to 0.01 m⁻¹",
+        "anomaly_note": "Sharp spikes may indicate particles, bubbles, biofouling, or sensor artifacts and should be interpreted with QC flags.",
+        "references": ["BGC-Argo User Manual"]
+    },
+    "nitrate": {
+        "unit": "µmol/kg",
+        "physical_meaning": "Nitrate concentration, a major nutrient that supports phytoplankton growth and traces remineralization and water-mass processes.",
+        "typical_surface_range": "Near 0 to 30 µmol/kg depending on region and season",
+        "typical_deep_range": "10 to 45 µmol/kg",
+        "anomaly_note": "Negative values are generally non-physical and suggest calibration or processing problems.",
+        "references": ["BGC-Argo User Manual"]
+    },
+    "ph": {
+        "unit": "total scale pH",
+        "physical_meaning": "A measure of seawater acidity linked to the marine carbonate system and ocean acidification.",
+        "typical_open_ocean_range": "~7.6 to 8.3",
+        "anomaly_note": "Values outside typical ocean ranges may indicate sensor drift, calibration issues, or extreme biogeochemical conditions.",
+        "references": ["BGC-Argo User Manual", "TEOS-10 standard"]
     }
 }

@@ -43,6 +43,44 @@ function toString(value: unknown): string {
   return String(value);
 }
 
+function toCategory(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  return String(value);
+}
+
+function toTime(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const t = typeof value === "number" ? value : Date.parse(String(value));
+  return Number.isFinite(t) ? t : null;
+}
+
+function getXAxisKind(rows: Record<string, unknown>[], key: string): "value" | "time" | "category" {
+  const values = rows
+    .map((row) => row[key])
+    .filter((value) => value !== null && value !== undefined && value !== "");
+
+  if (values.length === 0) return "value";
+  if (values.every((value) => toNumber(value) !== null)) return "value";
+  if (values.every((value) => toTime(value) !== null)) return "time";
+  return "category";
+}
+
+function toXAxisValue(value: unknown, kind: "value" | "time" | "category"): number | string | null {
+  if (kind === "value") return toNumber(value);
+  if (kind === "time") return toTime(value);
+  return toCategory(value);
+}
+
+function uniqueCategories(rows: Record<string, unknown>[], key: string): string[] {
+  return Array.from(
+    new Set(
+      rows
+        .map((row) => toCategory(row[key]))
+        .filter((value): value is string => value !== null)
+    )
+  );
+}
+
 const COMMON_STYLE = {
   textStyle: {
     fontFamily: "Helvetica Neue, Helvetica, Arial, sans-serif",
@@ -79,7 +117,7 @@ export function buildScatter(ctx: BuildContext): Record<string, unknown> {
   if (!x || !y) throw new Error("Scatter chart requires encoding.x and encoding.y");
 
   const seriesField = pick(ctx, "series");
-  const colorField = pick(ctx, "color");
+  const xAxisKind = getXAxisKind(ctx.data, x.key);
 
   // If a `series` field is set, split the data into one series per unique
   // value of that field (e.g. one line per cycle_number). Otherwise a single
@@ -87,12 +125,12 @@ export function buildScatter(ctx: BuildContext): Record<string, unknown> {
   const buildSeriesData = (rows: Record<string, unknown>[]) =>
     rows
       .map((row) => {
-        const xv = toNumber(row[x.key]);
+        const xv = toXAxisValue(row[x.key], xAxisKind);
         const yv = toNumber(row[y.key]);
         if (xv === null || yv === null) return null;
         return [xv, yv];
       })
-      .filter((p): p is [number, number] => p !== null);
+      .filter((p): p is [number | string, number] => p !== null);
 
   let series: Record<string, unknown>[];
   if (seriesField) {
@@ -108,14 +146,14 @@ export function buildScatter(ctx: BuildContext): Record<string, unknown> {
       type: "scatter",
       symbolSize: 5,
       data: buildSeriesData(rows),
-    }));
+    })).filter((s) => (s.data as unknown[]).length > 0);
   } else {
     series = [
       {
         type: "scatter",
         symbolSize: 5,
         data: buildSeriesData(ctx.data),
-        itemStyle: { color: colorField ? "#4A87BE" : "#4A87BE" },
+        itemStyle: { color: "#4A87BE" },
       },
     ];
   }
@@ -124,11 +162,12 @@ export function buildScatter(ctx: BuildContext): Record<string, unknown> {
     ...COMMON_STYLE,
     title: baseTitle(ctx.spec),
     xAxis: {
-      type: "value",
+      type: xAxisKind,
       name: x.label,
       nameLocation: "middle",
       nameGap: 30,
       scale: true,
+      data: xAxisKind === "category" ? uniqueCategories(ctx.data, x.key) : undefined,
       inverse: ctx.spec.options?.invert_x ?? false,
       splitLine: { lineStyle: { color: "#C8CDD4", type: "dashed" } },
     },
@@ -154,26 +193,30 @@ export function buildLine(ctx: BuildContext): Record<string, unknown> {
   if (!x || !y) throw new Error("Line chart requires encoding.x and encoding.y");
 
   const seriesField = pick(ctx, "series");
+  const xAxisKind = getXAxisKind(ctx.data, x.key);
 
   // For line charts, sort by the x value so the line renders correctly.
   const sorted = [...ctx.data].sort((a, b) => {
-    const av = toNumber(a[x.key]);
-    const bv = toNumber(b[x.key]);
+    const av = toXAxisValue(a[x.key], xAxisKind);
+    const bv = toXAxisValue(b[x.key], xAxisKind);
     if (av === null && bv === null) return 0;
     if (av === null) return 1;
     if (bv === null) return -1;
+    if (typeof av === "string" || typeof bv === "string") {
+      return String(av).localeCompare(String(bv));
+    }
     return av - bv;
   });
 
   const buildSeriesData = (rows: Record<string, unknown>[]) =>
     rows
       .map((row) => {
-        const xv = toNumber(row[x.key]);
+        const xv = toXAxisValue(row[x.key], xAxisKind);
         const yv = toNumber(row[y.key]);
         if (xv === null || yv === null) return null;
         return [xv, yv];
       })
-      .filter((p): p is [number, number] => p !== null);
+      .filter((p): p is [number | string, number] => p !== null);
 
   let series: Record<string, unknown>[];
   if (seriesField) {
@@ -191,7 +234,7 @@ export function buildLine(ctx: BuildContext): Record<string, unknown> {
       symbol: "circle",
       symbolSize: 4,
       data: buildSeriesData(rows),
-    }));
+    })).filter((s) => (s.data as unknown[]).length > 0);
   } else {
     series = [
       {
@@ -209,11 +252,12 @@ export function buildLine(ctx: BuildContext): Record<string, unknown> {
     ...COMMON_STYLE,
     title: baseTitle(ctx.spec),
     xAxis: {
-      type: "value",
+      type: xAxisKind,
       name: x.label,
       nameLocation: "middle",
       nameGap: 30,
       scale: true,
+      data: xAxisKind === "category" ? uniqueCategories(sorted, x.key) : undefined,
       inverse: ctx.spec.options?.invert_x ?? false,
       splitLine: { lineStyle: { color: "#C8CDD4", type: "dashed" } },
     },
@@ -240,8 +284,11 @@ export function buildBar(ctx: BuildContext): Record<string, unknown> {
 
   // For bar charts, x is typically categorical. We keep the order of the
   // incoming rows (the SQL query's natural order) rather than sorting.
-  const labels = ctx.data.map((row) => toString(row[x.key]));
-  const values = ctx.data.map((row) => toNumber(row[y.key]));
+  const rows = ctx.data.filter(
+    (row) => toCategory(row[x.key]) !== null && toNumber(row[y.key]) !== null
+  );
+  const labels = rows.map((row) => toString(row[x.key]));
+  const values = rows.map((row) => toNumber(row[y.key]));
 
   return {
     ...COMMON_STYLE,
@@ -340,6 +387,7 @@ export function buildHistogram(ctx: BuildContext): Record<string, unknown> {
 // instead of silently rendering nothing. Phase 5 will fill them in.
 
 export function buildHeatmap(_ctx: BuildContext): Record<string, unknown> {
+  void _ctx;
   throw new Error("Heatmap charts are not yet implemented (planned for Phase 5).");
 }
 
@@ -385,6 +433,7 @@ export function buildArea(ctx: BuildContext): Record<string, unknown> {
 }
 
 export function buildBoxplot(_ctx: BuildContext): Record<string, unknown> {
+  void _ctx;
   throw new Error("Boxplot charts are not yet implemented (planned for Phase 5).");
 }
 

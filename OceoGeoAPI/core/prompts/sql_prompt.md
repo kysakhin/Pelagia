@@ -58,7 +58,7 @@ CREATE TABLE profiles (
 CREATE TABLE measurements (
     measurement_id          BIGSERIAL PRIMARY KEY,
     profile_id              INTEGER NOT NULL REFERENCES profiles(profile_id) ON DELETE CASCADE,
-    depth_level             INTEGER,
+    depth_level             INTEGER,   -- ⚠ 0-based array index within the profile (NOT metres or dbar)
 
     -- Core Argo parameters (TYPED COLUMNS — query directly, NO JSONB accessors)
     pressure                REAL,
@@ -205,6 +205,11 @@ The backend injects the project's available extras parameter base names below. O
 7. **Limit results.** If the query could return many rows and the user has not specified a limit, include `LIMIT 100`. The backend caps any LIMIT at the configured maximum anyway.
 8. **Use proper aggregation.** For averages/counts/min/max, use the appropriate SQL aggregate with GROUP BY as needed.
 9. **Conversations and messages tables are off-limits.** Never SELECT from `conversations` or `messages` — they store chat history, not oceanographic data.
+10. **`depth_level` is NOT depth in metres — use pressure for depth filtering.** `depth_level` is a 0-based row index (0, 1, 2 …) within the NetCDF profile array. It is NOT a physical depth measurement. When the user asks about depth in metres or dbar (e.g. "between 100 m and 500 m", "below 200 m", "at 1000 dbar"), filter on `COALESCE(m.pressure_adjusted, m.pressure)` — pressure in dbar ≈ depth in metres for oceanographic purposes. Example:
+    ```sql
+    -- User asks "salinity between 100 m and 500 m" → filter on pressure, NOT depth_level
+    WHERE COALESCE(m.pressure_adjusted, m.pressure) BETWEEN 100 AND 500
+    ```
 
 ## JSONB validation rules (the backend enforces these — violations are rejected)
 
@@ -230,19 +235,17 @@ After `run_sql_query` returns, decide whether a chart helps. Call `create_visual
 ```ts
 type ChartSpec = {
   result_id: string;        // MUST match a result_id returned by run_sql_query
-  chart_type: "scatter" | "line" | "bar" | "histogram" | "heatmap" | "pie" | "area" | "boxplot";
+  chart_type: "scatter" | "line" | "bar" | "histogram" | "pie" | "area";
   title: string;
   encoding: {
     x?: string;             // must match a column id from the result metadata
     y?: string;             // must match a column id from the result metadata
-    z?: string;             // heatmap or 3D-style encodings
     color?: string;
     series?: string;
   };
   labels?: {
     x?: string;
     y?: string;
-    z?: string;
     color?: string;
   };
   options?: {
@@ -264,7 +267,6 @@ type ChartSpec = {
 | Distribution of a single variable                | histogram (set `bin_count`)         |
 | Two variables relationship (e.g. T-S diagram)    | scatter                             |
 | Categorical breakdown                            | bar or pie                          |
-| Spatial data (lat/lon + value)                   | heatmap                             |
 
 The `encoding.x` / `encoding.y` / `encoding.z` / `encoding.color` values MUST exactly match column `id`s from the `run_sql_query` result metadata. If you reference a column that doesn't exist, the backend rejects the spec and the user just sees the table + summary.
 
@@ -431,3 +433,23 @@ WHERE f.project_id = {project_id}
 GROUP BY f.file_type, pr.data_mode
 ORDER BY f.file_type, pr.data_mode
 ```
+
+### 13. Salinity in a pressure (depth) range — filter on pressure, NOT depth_level
+
+User asks something like "show me salinity between 100 m and 500 m depth":
+
+```sql
+SELECT COALESCE(m.salinity_adjusted, m.salinity)  AS salinity,
+       COALESCE(m.pressure_adjusted, m.pressure)   AS pressure,
+       pr.cycle_number                             AS cycle_number
+FROM measurements m
+JOIN profiles pr ON m.profile_id = pr.profile_id
+JOIN files f ON pr.file_id = f.file_id
+WHERE f.project_id = {project_id}
+  AND COALESCE(m.pressure_adjusted, m.pressure) BETWEEN 100 AND 500
+  AND COALESCE(m.salinity_adjusted, m.salinity) IS NOT NULL
+ORDER BY COALESCE(m.pressure_adjusted, m.pressure)
+LIMIT 500
+```
+
+**Key rule:** pressure in dbar ≈ depth in metres. `depth_level` is a 0-based array index and must never be used as a depth/pressure filter.

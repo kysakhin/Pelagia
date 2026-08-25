@@ -20,8 +20,13 @@ from core.chart_payload import (
     build_columns,
 )
 from core.chatbot import (
+    SQLAgentNoQueryError,
+    _INTENT_MAX_TOKENS,
+    _SQL_AGENT_MAX_TOKENS,
+    _SUMMARY_MAX_TOKENS,
     _format_available_params,
     _inject_available_params,
+    classify_intent,
     run_sql_agent,
 )
 from core.tools import (
@@ -34,6 +39,7 @@ from core.tools import (
     extract_tool_args,
     extract_tool_result,
 )
+from services.ChatService import ChatService
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -151,6 +157,20 @@ class TestJsonbValidation:
         assert len(errs) == 1
         assert "DOXY" in errs[0]
         assert "not a known extras parameter" in errs[0]
+
+    def test_empty_available_params_rejects_any_extras_key(self):
+        errs = _validate_jsonb_access(
+            "SELECT (m.extras->>'DOXY')::float FROM measurements m",
+            set(),
+        )
+        assert any("not a known extras parameter" in e for e in errs)
+
+    def test_none_available_params_skips_known_key_check(self):
+        errs = _validate_jsonb_access(
+            "SELECT (m.extras->>'DOXY')::float FROM measurements m",
+            None,
+        )
+        assert errs == []
 
     def test_missing_cast_rejected(self):
         errs = _validate_jsonb_access(
@@ -320,13 +340,24 @@ class TestChartPayloadService:
                 "encoding": {"x": "temperature"},
             })
 
-    def test_heatmap_requires_z(self, store_with_result):
+    def test_heatmap_rejected_until_implemented(self, store_with_result):
         store, rid = store_with_result
         svc = ChartPayloadService(store)
-        with pytest.raises(ChartSpecError, match="heatmap requires"):
+        with pytest.raises(ChartSpecError, match="unknown chart_type"):
             svc.build({
                 "result_id": rid,
                 "chart_type": "heatmap",
+                "title": "x",
+                "encoding": {"x": "temperature", "y": "pressure"},
+            })
+
+    def test_boxplot_rejected_until_implemented(self, store_with_result):
+        store, rid = store_with_result
+        svc = ChartPayloadService(store)
+        with pytest.raises(ChartSpecError, match="unknown chart_type"):
+            svc.build({
+                "result_id": rid,
+                "chart_type": "boxplot",
                 "title": "x",
                 "encoding": {"x": "temperature", "y": "pressure"},
             })
@@ -341,6 +372,22 @@ class TestChartPayloadService:
                 "title": "x",
                 "encoding": {"x": "temperature"},
             })
+
+    def test_histogram_ignores_bogus_y_encoding(self, store_with_result):
+        # Models often emit histogram encoding.y="count", but "count" is
+        # derived by the frontend binning, not a SQL column. It must not
+        # cause the whole payload to be rejected.
+        store, rid = store_with_result
+        svc = ChartPayloadService(store)
+        payload = svc.build({
+            "result_id": rid,
+            "chart_type": "histogram",
+            "title": "Histogram of Salinity",
+            "encoding": {"x": "temperature", "y": "count"},
+        })
+        assert payload is not None
+        assert payload["spec"]["chart_type"] == "histogram"
+        assert payload["spec"]["encoding"]["y"] is None
 
     def test_unknown_chart_type_rejected(self, store_with_result):
         store, rid = store_with_result
@@ -622,6 +669,11 @@ class TestPromptInjection:
         assert "none" in out
         assert "do not use extras" in out
 
+    def test_format_available_params_unknown(self):
+        out = _format_available_params(None)
+        assert "unknown" in out
+        assert "could not load project parameters" in out
+
     def test_format_available_params_list(self):
         out = _format_available_params(["DOXY", "CHLA"])
         assert out == "DOXY, CHLA"
@@ -635,6 +687,55 @@ class TestPromptInjection:
     def test_inject_preserves_prompt_without_placeholder(self):
         prompt = "No placeholder here."
         assert _inject_available_params(prompt, ["DOXY"]) == prompt
+
+
+# ---------------------------------------------------------------------------
+# 8b. Intent classification (reasoning-model safe)
+# ---------------------------------------------------------------------------
+
+class TestClassifyIntent:
+    def _run(self, content, message="how many profiles are in my project?"):
+        """Run classify_intent with a mocked Agent that returns `content`.
+
+        Returns (result, make_openrouter_model_mock).
+        """
+        with patch("core.chatbot.make_openrouter_model") as mock_model, \
+             patch("core.chatbot.Agent") as mock_agent_cls:
+            response = MagicMock()
+            response.content = content
+            instance = MagicMock()
+            instance.run.return_value = response
+            mock_agent_cls.return_value = instance
+
+            result = classify_intent(message, "system prompt")
+        return result, mock_model
+
+    def test_sql_label_returned(self):
+        out, _ = self._run("SQL")
+        assert out == "SQL"
+
+    def test_label_with_surrounding_text_matched(self):
+        out, _ = self._run("The intent is: SQL")
+        assert out == "SQL"
+
+    def test_off_topic_spacing_normalized(self):
+        out, _ = self._run("OFF TOPIC")
+        assert out == "OFF_TOPIC"
+
+    def test_intent_budget_sized_for_reasoning_models(self):
+        # Regression guard: max_tokens=10 truncates reasoning models
+        # mid-thought → empty content → everything looked OFF_TOPIC.
+        _, mock_model = self._run("SQL")
+        mock_model.assert_called_once_with(_INTENT_MAX_TOKENS)
+
+    def test_raises_on_empty_content(self):
+        with pytest.raises(ValueError, match="unparseable"):
+            self._run(None)
+
+    def test_raises_on_truncated_reasoning_output(self):
+        # Real-world failure observed with gpt-oss-20b @ max_tokens=10.
+        with pytest.raises(ValueError, match="unparseable"):
+            self._run("We have a conversation. The user")
 
 
 # ---------------------------------------------------------------------------
@@ -664,6 +765,12 @@ class TestRunSqlAgent:
             tools.append(viz_tu)
 
         response.tools = tools
+        return response
+
+    def _make_response_without_tools(self, content=""):
+        response = MagicMock()
+        response.content = content
+        response.tools = []
         return response
 
     @patch("core.chatbot.Agent")
@@ -730,6 +837,11 @@ class TestRunSqlAgent:
         assert result["chart_payload"]["meta"]["displayed_row_count"] == 5
         assert result["summary"] == "Here is the summary."
 
+        # Agent budgets must stay sized for reasoning models: SQL agent
+        # and summary agent each get their dedicated headroom.
+        mock_model.assert_any_call(_SQL_AGENT_MAX_TOKENS)
+        mock_model.assert_any_call(_SUMMARY_MAX_TOKENS)
+
         # 5. Available params were injected into the system message passed to Agent.
         _, kwargs = mock_agent_cls.call_args_list[0]
         assert "DOXY" in kwargs["system_message"]
@@ -775,6 +887,43 @@ class TestRunSqlAgent:
         assert result["chart_spec"] is None
         assert result["chart_payload"] is None
         assert result["row_count"] == 1
+
+    @patch("core.chatbot.Agent")
+    @patch("core.chatbot.make_openrouter_model")
+    def test_summary_agent_failure_keeps_sql_result(self, mock_model, mock_agent_cls):
+        store = ResultStore()
+        rows = [{"x": 1}]
+        columns = [{"id": "x", "type": "number"}]
+        rid = store.put(rows=rows, columns=columns, row_count=1)
+
+        sql_response = self._make_response(
+            sql_tool_result={
+                "result_id": rid,
+                "row_count": 1,
+                "columns": columns,
+                "sample_rows": rows,
+            },
+            sql_args={"query": "SELECT COUNT(*) AS x"},
+        )
+        mock_agent = MagicMock()
+        mock_agent.run.side_effect = [sql_response, TimeoutError("summary timeout")]
+        mock_agent_cls.return_value = mock_agent
+
+        db = MagicMock()
+        db.get_project_parameters = MagicMock(return_value=[])
+
+        result = run_sql_agent(
+            message="how many profiles are in my project",
+            user_id="user_123",
+            project_id=42,
+            system_message="sys",
+            db=db,
+            result_store=store,
+            chart_payload_service=ChartPayloadService(store),
+        )
+        assert result["data"] == rows
+        assert result["row_count"] == 1
+        assert "query returned 1 row" in result["summary"]
 
     @patch("core.chatbot.Agent")
     @patch("core.chatbot.make_openrouter_model")
@@ -855,6 +1004,143 @@ class TestRunSqlAgent:
         assert result["chart_payload"] is None
         # Summary agent must NOT be called when SQL errored.
         assert mock_agent.run.call_count == 1
+
+    @patch("core.chatbot.Agent")
+    @patch("core.chatbot.make_openrouter_model")
+    def test_no_query_from_sql_agent_raises(self, mock_model, mock_agent_cls):
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = self._make_response_without_tools(content="")
+        mock_agent_cls.return_value = mock_agent
+
+        db = MagicMock()
+        db.get_project_parameters = MagicMock(return_value=[])
+
+        with pytest.raises(SQLAgentNoQueryError, match="did not produce"):
+            run_sql_agent(
+                message="plot salinity vs temperature",
+                user_id="user_123",
+                project_id=42,
+                system_message="sys",
+                db=db,
+                result_store=ResultStore(),
+                chart_payload_service=ChartPayloadService(ResultStore()),
+            )
+
+    @patch("core.chatbot.Agent")
+    @patch("core.chatbot.make_openrouter_model")
+    def test_retries_once_when_first_attempt_produces_no_query(self, mock_model, mock_agent_cls):
+        # First attempt: malformed viz call, no SQL. Second attempt: valid SQL.
+        store = ResultStore()
+        rows = [{"temperature": float(t), "salinity": float(s)}
+                for t, s in zip(range(3), range(3))]
+        columns = [{"id": "temperature", "type": "number"},
+                   {"id": "salinity", "type": "number"}]
+        rid = store.put(rows=rows, columns=columns, row_count=len(rows))
+
+        first = self._make_response_without_tools(content="")
+        second = self._make_response(
+            sql_tool_result={
+                "result_id": rid,
+                "row_count": len(rows),
+                "columns": columns,
+                "sample_rows": rows[:2],
+            },
+            sql_args={"query": "SELECT temperature, salinity FROM measurements"},
+        )
+        summary_response = MagicMock()
+        summary_response.content = "Here is the data."
+        mock_agent = MagicMock()
+        mock_agent.run.side_effect = [first, second, summary_response]
+        mock_agent_cls.return_value = mock_agent
+
+        db = MagicMock()
+        db.get_project_parameters = MagicMock(return_value=[])
+
+        result = run_sql_agent(
+            message="plot salinity vs temperature as a scatter plot",
+            user_id="user_123",
+            project_id=42,
+            system_message="sys",
+            db=db,
+            result_store=store,
+            chart_payload_service=ChartPayloadService(store),
+        )
+        assert result["row_count"] == len(rows)
+        assert result["data"] == rows
+        assert mock_agent.run.call_count == 3  # 2 SQL attempts + 1 summary
+
+    @patch("core.chatbot.Agent")
+    @patch("core.chatbot.make_openrouter_model")
+    def test_inferred_chart_spec_when_model_skips_viz_tool(self, mock_model, mock_agent_cls):
+        # Model runs SQL but never calls create_visualization_spec → the
+        # inference fallback must produce a scatter spec from the message.
+        store = ResultStore()
+        rows = [{"temperature": float(t), "salinity": float(s)}
+                for t, s in zip(range(5), range(5))]
+        columns = [{"id": "temperature", "type": "number"},
+                   {"id": "salinity", "type": "number"}]
+        rid = store.put(rows=rows, columns=columns, row_count=len(rows))
+
+        sql_response = self._make_response(
+            sql_tool_result={
+                "result_id": rid,
+                "row_count": len(rows),
+                "columns": columns,
+                "sample_rows": rows[:2],
+            },
+            viz_tool_result=None,
+            sql_args={"query": "SELECT temperature, salinity FROM measurements"},
+        )
+        summary_response = MagicMock()
+        summary_response.content = "Scatter summary."
+        mock_agent = MagicMock()
+        mock_agent.run.side_effect = [sql_response, summary_response]
+        mock_agent_cls.return_value = mock_agent
+
+        db = MagicMock()
+        db.get_project_parameters = MagicMock(return_value=[])
+
+        result = run_sql_agent(
+            message="plot salinity vs temperature as a scatter plot",
+            user_id="user_123",
+            project_id=42,
+            system_message="sys",
+            db=db,
+            result_store=store,
+            chart_payload_service=ChartPayloadService(store),
+        )
+        assert result["chart_spec"] is not None
+        assert result["chart_spec"]["chart_type"] == "scatter"
+        assert result["chart_payload"] is not None
+        assert result["chart_payload"]["spec"]["encoding"] == {
+            "x": "temperature", "y": "salinity",
+        }
+
+
+# ---------------------------------------------------------------------------
+# 9b. ChatService intent-failure mapping
+# ---------------------------------------------------------------------------
+
+class TestChatServiceIntentFailure:
+    def _make_service(self) -> ChatService:
+        with patch("services.ChatService.NeonDBService"):
+            return ChatService()
+
+    @patch("services.ChatService.classify_intent",
+           side_effect=RuntimeError("openrouter down"))
+    def test_classifier_exception_maps_to_error_intent(self, _mock_cls):
+        # A classifier failure must surface as ERROR, never as OFF_TOPIC —
+        # otherwise outages look identical to genuine off-topic questions.
+        result = self._make_service().process_message("hello", "user_1", 42)
+        assert result["intent"] == "ERROR"
+        assert "response" in result
+
+    @patch("services.ChatService.classify_intent", return_value="OFF_TOPIC")
+    def test_genuine_off_topic_still_off_topic(self, _mock_cls):
+        result = self._make_service().process_message(
+            "write me a poem about cats", "user_1", 42)
+        assert result["intent"] == "OFF_TOPIC"
+        assert "oceanographic" in result["response"].lower()
 
 
 # ---------------------------------------------------------------------------

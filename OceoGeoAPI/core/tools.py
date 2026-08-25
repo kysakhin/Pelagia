@@ -106,7 +106,7 @@ def _strip_param_suffix(key: str) -> str:
     return key
 
 
-def _validate_jsonb_access(cleaned: str, available_params: set[str]) -> list[str]:
+def _validate_jsonb_access(cleaned: str, available_params: set[str] | None) -> list[str]:
     """Run JSONB validation rules from implementation_plan.md §3.4.
 
     Returns a list of human-readable error strings (empty = valid).
@@ -137,8 +137,11 @@ def _validate_jsonb_access(cleaned: str, available_params: set[str]) -> list[str
             )
             continue  # skip further checks for this token
 
-        # Rule 3: no hallucinated keys
-        if available_params and base not in available_params:
+        # Rule 3: no hallucinated keys.
+        # available_params is None  → fetch failed; skip this check.
+        # available_params is empty → project has no BGC params; reject any key.
+        # available_params is non-empty → reject keys not in the set.
+        if available_params is not None and base not in available_params:
             errors.append(
                 f"JSONB key {key!r} is not a known extras parameter for this "
                 f"project. Available: {sorted(available_params)}."
@@ -198,7 +201,13 @@ def create_sql_tool(
     """
 
     store = result_store if result_store is not None else GLOBAL_RESULT_STORE
-    params_set = {p.upper() for p in (available_params or [])}
+    # None = parameter fetch failed → skip JSONB key validation to avoid
+    # false-rejecting legitimate queries. Empty set = project has no BGC
+    # parameters → reject any extras->>'...' accessor (hallucinated keys).
+    params_set: set[str] | None = (
+        None if available_params is None
+        else {p.upper() for p in available_params}
+    )
 
     @tool(
         name="run_sql_query",
@@ -291,6 +300,13 @@ def create_sql_tool(
             return json.dumps({"error": str(exc)})
         except PermissionError as exc:
             return json.dumps({"error": str(exc)})
+        except psycopg2.Error as exc:
+            logger.exception("SQL database error")
+            detail = (getattr(exc, "pgerror", None) or str(exc)).strip()
+            error_type = exc.__class__.__name__
+            if detail:
+                return json.dumps({"error": f"{error_type}: {detail}"})
+            return json.dumps({"error": f"{error_type}: Failed to execute query."})
         except Exception:
             logger.exception("SQL tool error")
             return json.dumps(

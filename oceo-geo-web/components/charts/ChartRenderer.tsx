@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, ErrorInfo, ReactNode } from "react";
+import { Component, ErrorInfo, ReactNode, useMemo } from "react";
 import ReactECharts from "echarts-for-react";
 import type { ChartPayload } from "@/types";
 import { buildEChartsOption } from "./buildEChartsOption";
@@ -27,7 +27,6 @@ class ChartErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryStat
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    // eslint-disable-next-line no-console
     console.error("ChartRenderer error:", error, info);
   }
 
@@ -52,6 +51,8 @@ function ErrorFallback({
   error: Error;
   payload: ChartPayload;
 }) {
+  const columns = payload.data.length > 0 ? Object.keys(payload.data[0]) : [];
+
   return (
     <div
       style={{
@@ -68,6 +69,55 @@ function ErrorFallback({
         Could not render chart
       </div>
       <div style={{ marginBottom: "8px", color: "#7A2A2A" }}>{error.message}</div>
+      {columns.length > 0 && (
+        <div style={{ marginTop: "12px", overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", color: "#3D4A58" }}>
+            <thead>
+              <tr>
+                {columns.map((column) => (
+                  <th
+                    key={column}
+                    style={{
+                      borderBottom: "1px solid #DDE1E6",
+                      fontSize: "11px",
+                      padding: "6px 8px",
+                      textAlign: "left",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {column.replace(/_/g, " ")}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {payload.data.slice(0, 10).map((row, index) => (
+                <tr key={index}>
+                  {columns.map((column) => (
+                    <td
+                      key={column}
+                      style={{
+                        borderBottom: "1px solid #F0F2F4",
+                        fontFamily: "monospace",
+                        fontSize: "12px",
+                        padding: "6px 8px",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {row[column] === null || row[column] === undefined
+                        ? "null"
+                        : String(row[column])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ color: "#7A8A9A", fontSize: "11px", marginTop: "8px" }}>
+            Showing {Math.min(payload.data.length, 10)} of {payload.data.length} rows.
+          </div>
+        </div>
+      )}
       <details style={{ marginTop: "8px" }}>
         <summary
           style={{
@@ -109,6 +159,20 @@ export interface ChartRendererProps {
   style?: React.CSSProperties;
 }
 
+function ChartCanvas({ payload, style }: ChartRendererProps) {
+  const option = useMemo(() => buildEChartsOption(payload), [payload]);
+
+  return (
+    <ReactECharts
+      option={option}
+      style={style}
+      opts={{ renderer: "canvas" }}
+      notMerge={true}
+      lazyUpdate={true}
+    />
+  );
+}
+
 export default function ChartRenderer({ payload, style }: ChartRendererProps) {
   const defaultStyle: React.CSSProperties = {
     width: "100%",
@@ -122,13 +186,7 @@ export default function ChartRenderer({ payload, style }: ChartRendererProps) {
         <ErrorFallback error={error} payload={payload} />
       )}
     >
-      <ReactECharts
-        option={buildEChartsOption(payload)}
-        style={defaultStyle}
-        opts={{ renderer: "canvas" }}
-        notMerge={true}
-        lazyUpdate={true}
-      />
+      <ChartCanvas payload={payload} style={defaultStyle} />
     </ChartErrorBoundary>
   );
 }
