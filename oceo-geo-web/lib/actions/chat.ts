@@ -185,9 +185,27 @@ export async function loadConversationMessages(
     beforeMessageId
   );
 
+  // Legacy rows were double-encoded via JSON.stringify before inserting into
+  // jsonb (stored as JSON string). Unwrap until we get the real value.
+  function unwrapJsonb<T>(value: unknown): T | null {
+    let cur: unknown = value;
+    for (let i = 0; i < 3; i++) {
+      if (typeof cur === "string") {
+        try {
+          cur = JSON.parse(cur);
+        } catch {
+          return null;
+        }
+      } else {
+        break;
+      }
+    }
+    return cur as T | null;
+  }
+
   const messages: PersistedMessage[] = page.messages.map((row) => {
-    const sqlData = (row.sqlData as Record<string, unknown>[] | null) ?? undefined;
-    const chartSpec = (row.chartSpec as ChartSpec | null) ?? null;
+    const sqlData = unwrapJsonb<Record<string, unknown>[]>(row.sqlData) ?? undefined;
+    const chartSpec = unwrapJsonb<ChartSpec>(row.chartSpec) ?? null;
 
     // Reconstruct a chart_payload for historical rendering per §4.2.
     // The runtime result_id is long gone, but the spec + data are enough

@@ -265,8 +265,9 @@ export async function addMessage(
       content: message.content ?? null,
       intent: message.intent ?? null,
       sqlQuery: message.sqlQuery ?? null,
-      sqlData: message.sqlData ? JSON.stringify(message.sqlData) : null,
-      chartSpec: message.chartSpec ? JSON.stringify(message.chartSpec) : null,
+      // jsonb columns — pass JS values directly; drizzle serializes to JSON.
+      sqlData: (message.sqlData as unknown) ?? null,
+      chartSpec: (message.chartSpec as unknown) ?? null,
     })
     .returning();
 
