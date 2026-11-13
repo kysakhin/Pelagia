@@ -2,9 +2,18 @@ import json
 import logging
 
 from agno.agent import Agent
+from agno.models.base import Model
+from agno.models.openai import OpenAIChat, OpenAIResponses
 from agno.models.openrouter import OpenRouter
 
-from config import OPENROUTER_API_KEY, OPENROUTER_MODEL
+from config import (
+    LLM_MODEL,
+    LLM_PROVIDER,
+    LLM_SQL_REASONING_EFFORT,
+    OPENCODE_API_KEY,
+    OPENCODE_BASE_URL,
+    OPENROUTER_API_KEY,
+)
 from core.chart_payload import (
     GLOBAL_RESULT_STORE,
     ChartPayloadService,
@@ -31,9 +40,23 @@ _MESSAGE_PREVIEW_LIMIT = 100
 # Reasoning models (e.g. openai/gpt-oss-*) spend completion tokens thinking
 # before emitting content; undersized budgets truncate mid-reasoning and yield
 # empty content. Every agent therefore gets generous headroom.
-_INTENT_MAX_TOKENS = 300
-_SQL_AGENT_MAX_TOKENS = 1500
-_SUMMARY_MAX_TOKENS = 1000
+_INTENT_MAX_TOKENS = 800
+_SQL_AGENT_MAX_TOKENS = 4000
+_SUMMARY_MAX_TOKENS = 1500
+
+# Reasoning effort per step, for providers/models that support it (OpenAI
+# Responses API models such as muse-spark on OpenCode). Classification and
+# summaries need little thought; SQL writing benefits from more. Lower effort
+# is markedly faster. Override the SQL step with LLM_SQL_REASONING_EFFORT.
+_INTENT_REASONING = "minimal"
+_SQL_REASONING = LLM_SQL_REASONING_EFFORT
+_SUMMARY_REASONING = "minimal"
+
+# Self-correction: the agent may retry failed queries inside one run (bounded
+# by tool_call_limit), and we re-prompt it with the error up to this many
+# extra times if its run still ends on a failed query.
+_SQL_CORRECTION_ATTEMPTS = 2
+_SQL_TOOL_CALL_LIMIT = 6
 
 
 class SQLAgentNoQueryError(RuntimeError):
@@ -78,7 +101,7 @@ def _infer_chart_spec(message: str, result_id: str | None, columns: list[dict]) 
     if "line" in msg or "separate line" in msg:
         x = first_available(("pressure", "observed_at", "observation_date"))
         y = first_available(("temperature", "avg_temperature", "salinity", "avg_salinity"))
-        series = first_available(("cycle_number", "profile_id", "data_mode"))
+        series = first_available(("profile_id", "cycle_number", "data_mode"))
         if x and y:
             spec = {
                 "result_id": result_id,
@@ -138,7 +161,9 @@ def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
     """
     content = (response.content or "").strip()
 
-    sql_result = extract_tool_result(response, "run_sql_query")
+    # The agent may call run_sql_query several times in one run while it
+    # self-corrects; the final call is the one that counts.
+    sql_result = extract_tool_result(response, "run_sql_query", last=True)
 
     query = ""
     data: list[dict] = []
@@ -146,10 +171,12 @@ def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
     columns: list[dict] = []
     row_count = 0
     sql_error = None
+    retryable = True
 
     if sql_result:
         if "error" in sql_result:
             sql_error = sql_result["error"]
+            retryable = sql_result.get("retryable", True)
         else:
             result_id = sql_result.get("result_id")
             columns = sql_result.get("columns", [])
@@ -182,6 +209,7 @@ def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
                         sql_result = None
                     if sql_result and "error" in sql_result:
                         sql_error = sql_result["error"]
+                        retryable = sql_result.get("retryable", True)
                     elif sql_result:
                         result_id = sql_result.get("result_id")
                         columns = sql_result.get("columns", [])
@@ -194,7 +222,7 @@ def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
 
     # Recover query text from tool_args if we still don't have it.
     if not query:
-        args = extract_tool_args(response, "run_sql_query")
+        args = extract_tool_args(response, "run_sql_query", last=True)
         if args and isinstance(args.get("query"), str):
             query = args["query"]
 
@@ -205,20 +233,72 @@ def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
         "columns": columns,
         "row_count": row_count,
         "sql_error": sql_error,
+        "sql_retryable": retryable,
         "sql_result": sql_result,
         "content": content,
     }
 
 
-def make_openrouter_model(max_tokens: int) -> OpenRouter:
+def _correction_message(question: str, failed_query: str, error: str) -> str:
+    """Build the follow-up prompt that asks the agent to fix a failed query.
+
+    The agent has no memory between runs, so the original question, the
+    failed SQL and the database error are all restated.
+    """
+    return (
+        f"{question}\n\n"
+        "Your previous attempt to answer this failed.\n"
+        f"Query:\n{failed_query or '(no query captured)'}\n\n"
+        f"Error:\n{error}\n\n"
+        "Fix the query (check column names against the obs / profile_summary "
+        "views, aliases, GROUP BY, and casts) and call run_sql_query again."
+    )
+
+
+# OpenCode Zen serves these model families only on the OpenAI Responses API;
+# everything else it serves on chat/completions.
+_OPENCODE_RESPONSES_PREFIXES = ("gpt-", "grok-", "muse-")
+
+_RETRY_KWARGS = dict(retries=2, delay_between_retries=1, exponential_backoff=True)
+_LLM_TIMEOUT_S = 30.0
+
+
+def make_model(max_tokens: int, reasoning_effort: str | None = None) -> Model:
+    """Build the configured LLM (see LLM_PROVIDER / LLM_MODEL in config.py).
+
+    `reasoning_effort` ("minimal" | "low" | "medium" | "high") is applied
+    where the API supports it (OpenCode Responses models); ignored elsewhere.
+    """
+    if LLM_PROVIDER == "opencode":
+        if not OPENCODE_API_KEY:
+            raise RuntimeError("LLM_PROVIDER=opencode but OPENCODE_API_KEY is not set")
+        if LLM_MODEL.startswith(_OPENCODE_RESPONSES_PREFIXES):
+            return OpenAIResponses(
+                id=LLM_MODEL,
+                api_key=OPENCODE_API_KEY,
+                base_url=OPENCODE_BASE_URL,
+                max_output_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
+                timeout=_LLM_TIMEOUT_S,
+                **_RETRY_KWARGS,
+            )
+        return OpenAIChat(
+            id=LLM_MODEL,
+            api_key=OPENCODE_API_KEY,
+            base_url=OPENCODE_BASE_URL,
+            max_tokens=max_tokens,
+            timeout=_LLM_TIMEOUT_S,
+            **_RETRY_KWARGS,
+        )
+
+    if LLM_PROVIDER != "openrouter":
+        raise RuntimeError(f"Unknown LLM_PROVIDER {LLM_PROVIDER!r}")
     return OpenRouter(
         api_key=OPENROUTER_API_KEY,
-        id=OPENROUTER_MODEL,
+        id=LLM_MODEL,
         max_tokens=max_tokens,
-        timeout=30.0,
-        retries=2,
-        delay_between_retries=1,
-        exponential_backoff=True,
+        timeout=_LLM_TIMEOUT_S,
+        **_RETRY_KWARGS,
     )
 
 
@@ -226,7 +306,7 @@ def classify_intent(message: str, system_message: str) -> str:
     """Use a lightweight agent to classify the user message as
     SQL, DOMAIN, CONTEXT, or OFF_TOPIC."""
     agent = Agent(
-        model=make_openrouter_model(_INTENT_MAX_TOKENS),
+        model=make_model(_INTENT_MAX_TOKENS, reasoning_effort=_INTENT_REASONING),
         system_message=system_message,
         markdown=False,
     )
@@ -315,9 +395,10 @@ def run_sql_agent(
     viz_tool = create_visualization_spec_tool()
 
     agent = Agent(
-        model=make_openrouter_model(_SQL_AGENT_MAX_TOKENS),
+        model=make_model(_SQL_AGENT_MAX_TOKENS, reasoning_effort=_SQL_REASONING),
         system_message=system_message_injected,
         tools=[sql_tool, viz_tool],
+        tool_call_limit=_SQL_TOOL_CALL_LIMIT,
         markdown=False,
     )
 
@@ -338,6 +419,24 @@ def run_sql_agent(
             "create_visualization_spec before running the query."
         )
         outcome = _extract_sql_outcome(last_response, store, sql_tool)
+
+    # ── 3. Self-correction: feed SQL errors back to the agent ───────────────
+    for attempt in range(1, _SQL_CORRECTION_ATTEMPTS + 1):
+        if not outcome["sql_error"] or not outcome["sql_retryable"]:
+            break
+        logger.info(
+            "SQL attempt failed (%s); asking agent to correct (attempt %d/%d)",
+            outcome["sql_error"], attempt, _SQL_CORRECTION_ATTEMPTS,
+        )
+        last_response = agent.run(
+            _correction_message(message, outcome["query"], outcome["sql_error"])
+        )
+        corrected = _extract_sql_outcome(last_response, store, sql_tool)
+        if corrected["sql_result"] is None and not corrected["query"]:
+            # The agent produced nothing usable this round; keep the last
+            # real error rather than replacing it with an empty outcome.
+            continue
+        outcome = corrected
 
     query = outcome["query"]
     data = outcome["data"]
@@ -372,7 +471,7 @@ def run_sql_agent(
 
     # ── 5. Extract chart_spec from create_visualization_spec tool ───────────
     chart_spec = None
-    viz_result = extract_tool_result(last_response, "create_visualization_spec")
+    viz_result = extract_tool_result(last_response, "create_visualization_spec", last=True)
     if viz_result and viz_result.get("status") == "ok":
         chart_spec = viz_result.get("chart_spec")
     elif viz_result and viz_result.get("status") == "error":
@@ -404,7 +503,7 @@ def run_sql_agent(
 
     if data:
         summary_agent = Agent(
-            model=make_openrouter_model(_SUMMARY_MAX_TOKENS),
+            model=make_model(_SUMMARY_MAX_TOKENS, reasoning_effort=_SUMMARY_REASONING),
             system_message=(
                 "You are a helpful oceanographic data analyst. "
                 "Summarize the following SQL query results in clear, concise "
@@ -452,7 +551,7 @@ def run_sql_agent(
 def run_domain_agent(message: str, system_message: str) -> str:
     """Answer a general oceanographic / geospatial question."""
     agent = Agent(
-        model=make_openrouter_model(1000),
+        model=make_model(1000, reasoning_effort=_SUMMARY_REASONING),
         system_message=system_message,
         markdown=True,
     )
@@ -488,7 +587,7 @@ def run_context_agent(message: str, context: dict | None, system_message: str) -
     full_system_prompt = system_message + "\n\n" + glossary_str + view_state_str
 
     agent = Agent(
-        model=make_openrouter_model(1000),
+        model=make_model(1000, reasoning_effort=_SUMMARY_REASONING),
         system_message=full_system_prompt,
         markdown=True,
     )

@@ -10,15 +10,13 @@ from core.chart_payload import (
     ResultStore,
     build_columns,
 )
+from core.scoped_sql import PROJECT_PARAM, build_scoped_query, validate_agent_sql
 from services.NeondbService import NeonDBService
 
 logger = logging.getLogger(__name__)
 
-# Statements that must never appear in a query from the agent
-_FORBIDDEN_KEYWORDS = re.compile(
-    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|EXEC|EXECUTE)\b",
-    re.IGNORECASE,
-)
+# Per-query server-side timeout for agent SQL.
+STATEMENT_TIMEOUT_MS = 15000
 
 # Matches a bare language tag on its own line, e.g. "sql" or "SQL" at the start
 _LANG_TAG_RE = re.compile(r"^[ \t]*(sql|SQL)\s*\n")
@@ -159,25 +157,6 @@ def _validate_jsonb_access(cleaned: str, available_params: set[str] | None) -> l
     return errors
 
 
-def _cap_user_limit(cleaned: str) -> str:
-    """If the query has a LIMIT N where N > QUERY_LIMIT, cap it. If it has no
-    LIMIT, add one. Operates on the cleaned query string.
-    """
-    match = re.search(r"\bLIMIT\s+(\d+)\b", cleaned, re.IGNORECASE)
-    if match:
-        n = int(match.group(1))
-        if n > QUERY_LIMIT:
-            cleaned = (
-                cleaned[: match.start()]
-                + f"LIMIT {QUERY_LIMIT}"
-                + cleaned[match.end():]
-            )
-        return cleaned
-
-    # No LIMIT present — append one.
-    return cleaned.rstrip("; \t\n") + f" LIMIT {QUERY_LIMIT}"
-
-
 def create_sql_tool(
     project_id: int,
     user_id: str,
@@ -212,14 +191,14 @@ def create_sql_tool(
     @tool(
         name="run_sql_query",
         description=(
-            "Execute a read-only SQL SELECT query against the project's "
-            "oceanographic database. Returns a JSON object with: "
+            "Execute a read-only SQL SELECT query against the current project's "
+            "oceanographic data. All tables (obs, profile_summary, files, "
+            "profiles, measurements, project_parameters) are already scoped to "
+            "the current project — no project filter is needed. Returns JSON with: "
             "result_id (a handle to reference this result in create_visualization_spec), "
-            "row_count (total rows returned by SQL), "
-            "columns (list of {id, type}), and "
-            "sample_rows (a small preview, do not rely on it for full data). "
-            "Use {project_id} as a placeholder for the current project; it is "
-            "substituted safely."
+            "row_count, columns (list of {id, type}), and sample_rows (a small "
+            "preview). On failure returns {error}; read it, fix the query, and "
+            "call this tool again."
         ),
     )
     def run_sql_query(query: str) -> str:
@@ -232,49 +211,42 @@ def create_sql_tool(
         cleaned = _clean_sql_query(query)
         logger.debug("Cleaned SQL: %s", cleaned)
 
-        # ── 1. Block anything that is not a SELECT/WITH ─────────────────────
-        if _FORBIDDEN_KEYWORDS.search(cleaned):
-            return json.dumps({"error": "Only SELECT queries are allowed."})
-
-        first_word = (
-            cleaned.lstrip("( \t\n").split()[0].upper()
-            if cleaned.strip() else ""
-        )
-        if first_word not in ("SELECT", "WITH"):
-            return json.dumps({"error": "Only SELECT queries are allowed."})
-
-        statements = [s.strip() for s in cleaned.split(";") if s.strip()]
-        if len(statements) > 1:
-            return json.dumps(
-                {"error": "Only a single SELECT statement is allowed."}
-            )
+        # ── 1. Statement-level validation (SELECT only, no scope escapes) ───
+        validation_error = validate_agent_sql(cleaned)
+        if validation_error:
+            # Write/DDL attempts are not worth a retry; scope escapes are
+            # (the model can rewrite against the scoped tables).
+            retryable = validation_error != "Only SELECT queries are allowed."
+            return json.dumps({"error": validation_error, "retryable": retryable})
 
         # ── 2. JSONB validation (§3.4) ──────────────────────────────────────
         jsonb_errors = _validate_jsonb_access(cleaned, params_set)
         if jsonb_errors:
             return json.dumps(
-                {"error": "JSONB validation failed: " + " ".join(jsonb_errors)}
+                {"error": "JSONB validation failed: " + " ".join(jsonb_errors),
+                 "retryable": True}
             )
 
-        # ── 3. Substitute {project_id} safely via psycopg2 params ───────────
-        parameterized = cleaned.replace("{project_id}", "%s")
-        count = cleaned.count("{project_id}")
-        params = tuple([project_id] * count) if count else ()
+        # ── 3. Wrap in the project-scoped CTE layer + outer row limit ───────
+        scoped_query = build_scoped_query(cleaned, QUERY_LIMIT)
+        params = {PROJECT_PARAM: project_id}
 
-        # ── 4. Enforce row limit (cap or add) ───────────────────────────────
-        parameterized = _cap_user_limit(parameterized)
-
-        # ── 5. Verify ownership, then execute ───────────────────────────────
+        # ── 4. Verify ownership, then execute read-only with a timeout ──────
         try:
             with db.get_connection() as conn:
-                # Ownership check on a throwaway cursor.
+                # Session guards + ownership check on a throwaway cursor.
+                # SET TRANSACTION must run before any other statement.
                 with conn.cursor() as verify_cur:
+                    verify_cur.execute("SET TRANSACTION READ ONLY", ())
+                    verify_cur.execute(
+                        f"SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}", ()
+                    )
                     db.verify_project_ownership(verify_cur, project_id, user_id)
 
                 with conn.cursor(
                     cursor_factory=psycopg2.extras.RealDictCursor
                 ) as cur:
-                    cur.execute(parameterized, params)
+                    cur.execute(scoped_query, params)
                     rows = [dict(r) for r in cur.fetchall()]
                     columns = build_columns(cur.description)
 
@@ -297,21 +269,34 @@ def create_sql_tool(
                 default=str,
             )
         except LookupError as exc:
-            return json.dumps({"error": str(exc)})
+            return json.dumps({"error": str(exc), "retryable": False})
         except PermissionError as exc:
-            return json.dumps({"error": str(exc)})
+            return json.dumps({"error": str(exc), "retryable": False})
+        except psycopg2.errors.QueryCanceled:
+            logger.warning("SQL statement timed out")
+            return json.dumps({
+                "error": (
+                    f"Query exceeded the {STATEMENT_TIMEOUT_MS // 1000}s time limit. "
+                    "Aggregate or filter more (e.g. GROUP BY bins, fewer cycles)."
+                ),
+                "retryable": True,
+            })
         except psycopg2.Error as exc:
-            logger.exception("SQL database error")
+            logger.warning("SQL database error: %s", exc)
             detail = (getattr(exc, "pgerror", None) or str(exc)).strip()
             error_type = exc.__class__.__name__
             if detail:
-                return json.dumps({"error": f"{error_type}: {detail}"})
-            return json.dumps({"error": f"{error_type}: Failed to execute query."})
+                return json.dumps({"error": f"{error_type}: {detail}", "retryable": True})
+            return json.dumps({
+                "error": f"{error_type}: Failed to execute query.",
+                "retryable": True,
+            })
         except Exception:
             logger.exception("SQL tool error")
-            return json.dumps(
-                {"error": "Failed to execute query. Please try rephrasing your question."}
-            )
+            return json.dumps({
+                "error": "Failed to execute query. Please try rephrasing your question.",
+                "retryable": False,
+            })
 
     return run_sql_query
 
@@ -374,15 +359,21 @@ def create_visualization_spec_tool():
 
 # ── Helper for tests / chatbot to extract a tool result by name ──────────────
 
-def extract_tool_result(response, tool_name: str) -> dict | None:
+def extract_tool_result(response, tool_name: str, *, last: bool = False) -> dict | None:
     """Walk an Agno `response.tools` list and return the parsed JSON result
-    for the first tool call named `tool_name`. Returns None if not found.
+    for the first (or, with ``last=True``, the final) tool call named
+    `tool_name`. Returns None if not found.
+
+    ``last=True`` matters when the agent self-corrects within one run: the
+    first run_sql_query call may have errored and a later one succeeded.
 
     Agno tool-use objects expose `.tool_name` (or `.tool`), `.result` (str),
     and `.tool_args` (dict|str). We are lenient about attribute names so this
     works across Agno versions.
     """
-    tools = getattr(response, "tools", None) or []
+    tools = list(getattr(response, "tools", None) or [])
+    if last:
+        tools.reverse()
     for tu in tools:
         name = (
             getattr(tu, "tool_name", None)
@@ -403,9 +394,12 @@ def extract_tool_result(response, tool_name: str) -> dict | None:
     return None
 
 
-def extract_tool_args(response, tool_name: str) -> dict | None:
-    """Return the tool_args dict for the first tool call named `tool_name`."""
-    tools = getattr(response, "tools", None) or []
+def extract_tool_args(response, tool_name: str, *, last: bool = False) -> dict | None:
+    """Return the tool_args dict for the first (or final, with ``last=True``)
+    tool call named `tool_name`."""
+    tools = list(getattr(response, "tools", None) or [])
+    if last:
+        tools.reverse()
     for tu in tools:
         name = (
             getattr(tu, "tool_name", None)
