@@ -2,9 +2,11 @@
 
 import { auth } from "@clerk/nextjs/server";
 import type {
+  AnswerMetadata,
   ChartPayload,
   ChartSpec,
   ColumnMeta,
+  ConceptRef,
 } from "@/types";
 import {
   addMessage,
@@ -39,6 +41,10 @@ export interface SendMessageResult {
   row_count?: number;
   chart_spec?: ChartSpec | null;
   chart_payload?: ChartPayload | null;
+  // Ontology provenance (SQL intent)
+  concepts?: ConceptRef[];
+  methods?: string[];
+  quality_flags?: string[];
 }
 
 /** A prior turn sent to the backend so follow-up questions have context. */
@@ -164,6 +170,7 @@ export async function sendChatMessagePersisted(
     sqlQuery: result.query,
     sqlData,
     chartSpec,
+    metadata: answerMetadata(result),
   });
 
   // 6. If we created the conversation, the title was already set from the
@@ -180,6 +187,16 @@ export async function sendChatMessagePersisted(
   };
 }
 
+/** Provenance worth keeping with the message; null when there is none. */
+function answerMetadata(result: SendMessageResult): AnswerMetadata | null {
+  const meta: AnswerMetadata = {
+    concepts: result.concepts?.length ? result.concepts : undefined,
+    methods: result.methods?.length ? result.methods : undefined,
+    quality_flags: result.quality_flags?.length ? result.quality_flags : undefined,
+  };
+  return meta.concepts || meta.methods || meta.quality_flags ? meta : null;
+}
+
 // ── Historical message loading ──────────────────────────────────────────────
 
 export interface PersistedMessage {
@@ -190,6 +207,7 @@ export interface PersistedMessage {
   sql_query?: string;
   sql_data?: Record<string, unknown>[];
   chart_spec?: ChartSpec | null;
+  metadata?: AnswerMetadata | null;
   created_at: Date;
   // Reconstructed for the frontend: a chart_payload built from chart_spec +
   // sql_data so historical charts render without a runtime result_id.
@@ -262,6 +280,7 @@ export async function loadConversationMessages(
       sql_query: row.sqlQuery ?? undefined,
       sql_data: sqlData,
       chart_spec: chartSpec,
+      metadata: unwrapJsonb<AnswerMetadata>(row.metadata) ?? null,
       created_at: row.createdAt ?? new Date(),
       chart_payload: chartPayload,
     };

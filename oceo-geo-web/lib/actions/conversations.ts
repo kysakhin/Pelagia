@@ -238,6 +238,7 @@ export async function addMessage(
     sqlQuery?: string;
     sqlData?: unknown;
     chartSpec?: unknown;
+    metadata?: unknown;
   }
 ) {
   const { userId } = await auth();
@@ -268,6 +269,7 @@ export async function addMessage(
       // jsonb columns — pass JS values directly; drizzle serializes to JSON.
       sqlData: (message.sqlData as unknown) ?? null,
       chartSpec: (message.chartSpec as unknown) ?? null,
+      metadata: (message.metadata as unknown) ?? null,
     })
     .returning();
 

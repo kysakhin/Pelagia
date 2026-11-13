@@ -7,9 +7,10 @@ import {
   loadConversationMessages,
   type PersistedMessage,
 } from "@/lib/actions/chat";
-import type { ChartPayload } from "@/types";
+import type { AnswerMetadata, ChartPayload } from "@/types";
 import ChartRenderer from "@/components/charts/ChartRenderer";
 import Markdown from "@/components/chat/Markdown";
+import AnswerProvenance from "@/components/chat/AnswerProvenance";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ interface ChatViewMessage {
   query?: string;
   error?: boolean;
   chartPayload?: ChartPayload | null;
+  meta?: AnswerMetadata | null;
 }
 
 interface ChatViewProps {
@@ -47,6 +49,7 @@ function persistedToViewMessage(msg: PersistedMessage): ChatViewMessage {
     data: msg.sql_data,
     query: msg.sql_query,
     chartPayload: msg.chart_payload,
+    meta: msg.metadata,
   };
 }
 
@@ -141,6 +144,9 @@ function AssistantMessage({ message }: { message: ChatViewMessage }) {
           </div>
         )}
 
+        {/* What the answer was based on (ontology concepts, methods, QC) */}
+        {!message.error && <AnswerProvenance meta={message.meta} />}
+
         {/* SQL query disclosure */}
         {message.intent === "SQL" && message.query && (
           <details className="mt-4 group">
@@ -234,6 +240,11 @@ export default function ChatView({
           query: result.query,
           error: result.intent === "ERROR",
           chartPayload: result.chart_payload,
+          meta: {
+            concepts: result.concepts,
+            methods: result.methods,
+            quality_flags: result.quality_flags,
+          },
         };
 
         setMessages((prev) => [...prev, assistantMsg]);

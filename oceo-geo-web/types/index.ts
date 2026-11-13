@@ -87,3 +87,17 @@ export interface ColumnMeta {
   id: string;
   type: "number" | "integer" | "string" | "boolean" | "datetime" | "object";
 }
+
+// ── Ontology provenance (see OceoGeoAPI/core/concept_linker.py) ────────────
+export interface ConceptRef {
+  id: string;
+  label: string;
+  kind: "variable" | "coordinate" | "derived" | "feature" | "water_mass" | "region";
+}
+
+/** What the answer was based on: matched concepts, methods, data warnings. */
+export interface AnswerMetadata {
+  concepts?: ConceptRef[];
+  methods?: string[];
+  quality_flags?: string[];
+}
