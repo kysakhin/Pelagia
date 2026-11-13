@@ -1,0 +1,1205 @@
+{
+ "@context": {
+  "skos": "http://www.w3.org/2004/02/skos/core#",
+  "dct": "http://purl.org/dc/terms/",
+  "oceogeo": "https://oceogeo.app/ontology#"
+ },
+ "@graph": [
+  {
+   "@id": "oceogeo:scheme",
+   "@type": "skos:ConceptScheme",
+   "dct:title": "OceoGeo oceanographic ontology",
+   "dct:description": "Concepts used to ground natural-language questions about Argo float data."
+  },
+  {
+   "@id": "oceogeo:collection_variable",
+   "@type": "skos:Collection",
+   "skos:prefLabel": "Variables",
+   "skos:member": [
+    "oceogeo:temperature",
+    "oceogeo:salinity",
+    "oceogeo:pressure",
+    "oceogeo:doxy",
+    "oceogeo:chla",
+    "oceogeo:bbp700",
+    "oceogeo:cdom",
+    "oceogeo:nitrate",
+    "oceogeo:ph",
+    "oceogeo:sound_velocity",
+    "oceogeo:density"
+   ]
+  },
+  {
+   "@id": "oceogeo:collection_coordinate",
+   "@type": "skos:Collection",
+   "skos:prefLabel": "Coordinates",
+   "skos:member": [
+    "oceogeo:time",
+    "oceogeo:position"
+   ]
+  },
+  {
+   "@id": "oceogeo:collection_derived",
+   "@type": "skos:Collection",
+   "skos:prefLabel": "Derived quantities",
+   "skos:member": [
+    "oceogeo:mixed_layer_depth",
+    "oceogeo:thermocline_depth",
+    "oceogeo:isotherm_depth",
+    "oceogeo:value_at_depth",
+    "oceogeo:surface_value",
+    "oceogeo:layer_mean",
+    "oceogeo:stratification_index",
+    "oceogeo:intermediate_salinity_maximum",
+    "oceogeo:intermediate_salinity_minimum",
+    "oceogeo:oxygen_minimum",
+    "oceogeo:chlorophyll_maximum_depth",
+    "oceogeo:depth_anomaly"
+   ]
+  },
+  {
+   "@id": "oceogeo:collection_feature",
+   "@type": "skos:Collection",
+   "skos:prefLabel": "Features",
+   "skos:member": [
+    "oceogeo:thermocline",
+    "oceogeo:mixed_layer",
+    "oceogeo:temperature_inversion",
+    "oceogeo:oxygen_minimum_zone",
+    "oceogeo:deep_chlorophyll_maximum"
+   ]
+  },
+  {
+   "@id": "oceogeo:collection_water_mass",
+   "@type": "skos:Collection",
+   "skos:prefLabel": "Water masses",
+   "skos:member": [
+    "oceogeo:mediterranean_outflow_water",
+    "oceogeo:antarctic_intermediate_water",
+    "oceogeo:north_atlantic_central_water",
+    "oceogeo:north_atlantic_deep_water",
+    "oceogeo:subantarctic_mode_water"
+   ]
+  },
+  {
+   "@id": "oceogeo:collection_region",
+   "@type": "skos:Collection",
+   "skos:prefLabel": "Regions",
+   "skos:member": [
+    "oceogeo:north_atlantic",
+    "oceogeo:south_atlantic",
+    "oceogeo:canary_basin",
+    "oceogeo:mediterranean_sea",
+    "oceogeo:indian_ocean",
+    "oceogeo:arabian_sea",
+    "oceogeo:north_pacific",
+    "oceogeo:south_pacific",
+    "oceogeo:southern_ocean",
+    "oceogeo:arctic_ocean"
+   ]
+  },
+  {
+   "@id": "oceogeo:position",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Position",
+   "skos:altLabel": [
+    "location",
+    "locations",
+    "where has",
+    "where did",
+    "where was",
+    "where is the float",
+    "latitude",
+    "longitude",
+    "map",
+    "track",
+    "trajectory",
+    "drift",
+    "route",
+    "ocean region",
+    "which region",
+    "what region",
+    "which ocean"
+   ],
+   "oceogeo:kind": "coordinate",
+   "skos:definition": "Profile position (one per profile). Use the map chart to show it."
+  },
+  {
+   "@id": "oceogeo:time",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Time",
+   "skos:altLabel": [
+    "date",
+    "when",
+    "over time",
+    "season",
+    "seasonal",
+    "month",
+    "year",
+    "trend",
+    "timeline"
+   ],
+   "oceogeo:kind": "coordinate",
+   "skos:definition": "Profile time. Order and plot by observed_at; cycle_number repeats across floats and is not a time axis."
+  },
+  {
+   "@id": "oceogeo:chlorophyll_maximum_depth",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Deep chlorophyll maximum depth",
+   "skos:altLabel": [
+    "chlorophyll maximum",
+    "chlorophyll max",
+    "dcm depth",
+    "depth of chlorophyll maximum"
+   ],
+   "oceogeo:kind": "derived",
+   "skos:definition": "Depth of the highest chlorophyll-a value in each profile.",
+   "oceogeo:method": "Maximum of adjusted-with-fallback CHLA per profile within the top 300 dbar (below that, fluorescence is noise).",
+   "oceogeo:unit": "dbar",
+   "dct:source": [
+    "Cullen (2015) Annu. Rev. Mar. Sci. 7, 207–239"
+   ],
+   "oceogeo:derivedFrom": [
+    {
+     "@id": "oceogeo:chla"
+    },
+    {
+     "@id": "oceogeo:pressure"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:depth_anomaly",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Anomaly relative to the project mean",
+   "skos:altLabel": [
+    "anomaly",
+    "anomalies",
+    "deviation",
+    "compared to average",
+    "warmer than usual",
+    "colder than usual",
+    "unusual"
+   ],
+   "oceogeo:kind": "derived",
+   "skos:definition": "How much each profile differs from the project's mean profile at the same depth.",
+   "oceogeo:method": "Bin by 50 dbar; anomaly = profile's bin mean minus the mean over all profiles in that bin. Shown for temperature; swap the variable as needed. This is relative to *this dataset*, not to a climatology.",
+   "oceogeo:derivedFrom": [
+    {
+     "@id": "oceogeo:pressure"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:intermediate_salinity_maximum",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Intermediate salinity maximum",
+   "skos:altLabel": [
+    "salinity maximum",
+    "salinity max",
+    "salty layer",
+    "saltiest layer",
+    "salinity peak"
+   ],
+   "oceogeo:kind": "derived",
+   "skos:definition": "A subsurface local maximum of salinity in the intermediate layer — the classic signature of Mediterranean Outflow Water in the North Atlantic.",
+   "oceogeo:method": "Within 600–1600 dbar, levels whose salinity exceeds both neighbours (LAG/LEAD over pressure) are local maxima; the saltiest one per profile is reported. A *local* maximum is used because salinity usually also decreases from a salty surface layer, so the plain maximum below 500 m would just be the top of the window.",
+   "oceogeo:unit": "PSU",
+   "dct:source": [
+    "Talley et al. (2011) Descriptive Physical Oceanography, ch. 9"
+   ],
+   "oceogeo:derivedFrom": [
+    {
+     "@id": "oceogeo:salinity"
+    },
+    {
+     "@id": "oceogeo:pressure"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:intermediate_salinity_minimum",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Intermediate salinity minimum",
+   "skos:altLabel": [
+    "salinity minimum",
+    "salinity min",
+    "fresh layer",
+    "freshest layer"
+   ],
+   "oceogeo:kind": "derived",
+   "skos:definition": "A subsurface local minimum of salinity at intermediate depth — the signature of Antarctic Intermediate Water.",
+   "oceogeo:method": "Within 400–1300 dbar, levels whose salinity is below both neighbours; the freshest one per profile is reported.",
+   "oceogeo:unit": "PSU",
+   "dct:source": [
+    "Talley et al. (2011) Descriptive Physical Oceanography, ch. 9, 13"
+   ],
+   "oceogeo:derivedFrom": [
+    {
+     "@id": "oceogeo:salinity"
+    },
+    {
+     "@id": "oceogeo:pressure"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:isotherm_depth",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Isotherm depth",
+   "skos:altLabel": [
+    "isotherm",
+    "isotherms"
+   ],
+   "oceogeo:kind": "derived",
+   "skos:definition": "Depth at which water first reaches a given temperature.",
+   "oceogeo:method": "Shallowest level (below 5 dbar) whose temperature is at or below the isotherm value, per profile. Change 10 to the requested temperature.",
+   "oceogeo:unit": "dbar",
+   "dct:source": [
+    "Talley et al. (2011) Descriptive Physical Oceanography"
+   ],
+   "oceogeo:derivedFrom": [
+    {
+     "@id": "oceogeo:temperature"
+    },
+    {
+     "@id": "oceogeo:pressure"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:layer_mean",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Layer mean",
+   "skos:altLabel": [
+    "layer average",
+    "average between",
+    "mean between",
+    "upper ocean",
+    "upper ocean average",
+    "heat content proxy"
+   ],
+   "oceogeo:kind": "derived",
+   "skos:definition": "Mean of a variable over a depth layer, per profile.",
+   "oceogeo:method": "Simple mean of all levels inside the layer (levels are not depth-weighted; Argo sampling is denser near the surface).",
+   "oceogeo:derivedFrom": [
+    {
+     "@id": "oceogeo:pressure"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:mixed_layer_depth",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Mixed layer depth",
+   "skos:altLabel": [
+    "mld",
+    "surface mixed layer depth",
+    "mixing depth"
+   ],
+   "oceogeo:kind": "derived",
+   "skos:definition": "Depth of the near-surface layer homogenised by wind and convection.",
+   "oceogeo:method": "Temperature threshold criterion: the shallowest depth below 10 dbar where temperature is more than 0.2 °C colder than at the ~10 dbar reference. (The density-based 0.03 kg/m³ criterion needs TEOS-10 density, not yet available.)",
+   "oceogeo:unit": "dbar",
+   "dct:source": [
+    "de Boyer Montégut et al. (2004), J. Geophys. Res. 109, C12003"
+   ],
+   "oceogeo:derivedFrom": [
+    {
+     "@id": "oceogeo:temperature"
+    },
+    {
+     "@id": "oceogeo:pressure"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:oxygen_minimum",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Oxygen minimum",
+   "skos:altLabel": [
+    "lowest oxygen",
+    "minimum oxygen",
+    "oxygen min"
+   ],
+   "oceogeo:kind": "derived",
+   "skos:definition": "Depth and value of the lowest dissolved oxygen in each profile.",
+   "oceogeo:method": "Minimum of adjusted-with-fallback DOXY per profile.",
+   "oceogeo:unit": "µmol/kg",
+   "dct:source": [
+    "BGC-Argo User's Manual"
+   ],
+   "oceogeo:derivedFrom": [
+    {
+     "@id": "oceogeo:doxy"
+    },
+    {
+     "@id": "oceogeo:pressure"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:stratification_index",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Upper-ocean stratification (temperature proxy)",
+   "skos:altLabel": [
+    "stratification",
+    "stratified",
+    "stability",
+    "water column stability",
+    "vertical structure"
+   ],
+   "oceogeo:kind": "derived",
+   "skos:definition": "How strongly the upper ocean is layered.",
+   "oceogeo:method": "Proxy: temperature at ~10 dbar minus temperature at ~200 dbar. Larger means more stratified. A proper buoyancy frequency (N²) needs TEOS-10 density (not yet available).",
+   "oceogeo:unit": "°C",
+   "dct:source": [
+    "Talley et al. (2011) Descriptive Physical Oceanography"
+   ],
+   "oceogeo:derivedFrom": [
+    {
+     "@id": "oceogeo:temperature"
+    },
+    {
+     "@id": "oceogeo:pressure"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:surface_value",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Surface value",
+   "skos:altLabel": [
+    "surface",
+    "sea surface",
+    "near-surface",
+    "at the surface",
+    "sst"
+   ],
+   "oceogeo:kind": "derived",
+   "skos:definition": "The shallowest valid measurement of a variable in each profile.",
+   "oceogeo:method": "For temperature and salinity use profile_summary.surface_temperature / surface_salinity. For other variables, the shallowest value within the top 10 dbar. Argo floats usually stop sampling a few dbar below the surface, so this is \"near-surface\".",
+   "oceogeo:derivedFrom": [
+    {
+     "@id": "oceogeo:pressure"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:thermocline_depth",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Thermocline depth",
+   "skos:altLabel": [
+    "temperature gradient",
+    "steepest temperature drop"
+   ],
+   "oceogeo:kind": "derived",
+   "skos:definition": "Depth where temperature decreases most rapidly with depth.",
+   "oceogeo:method": "Depth of the maximum vertical temperature gradient -dT/dp between consecutive levels, between 10 and 1000 dbar (excludes surface noise).",
+   "oceogeo:unit": "dbar",
+   "dct:source": [
+    "Talley et al. (2011) Descriptive Physical Oceanography, ch. 4"
+   ],
+   "oceogeo:derivedFrom": [
+    {
+     "@id": "oceogeo:temperature"
+    },
+    {
+     "@id": "oceogeo:pressure"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:value_at_depth",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Value at a depth",
+   "skos:altLabel": [
+    "at depth",
+    "at a depth",
+    "value at depth",
+    "at a given depth"
+   ],
+   "oceogeo:kind": "derived",
+   "skos:definition": "A variable's value at (closest to) a requested depth in each profile.",
+   "oceogeo:method": "For each profile, the measurement closest to the target pressure within ±50 dbar (DISTINCT ON + ORDER BY distance). Swap temperature for any variable's source expression.",
+   "oceogeo:derivedFrom": [
+    {
+     "@id": "oceogeo:pressure"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:deep_chlorophyll_maximum",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Deep chlorophyll maximum",
+   "skos:altLabel": [
+    "dcm",
+    "subsurface chlorophyll maximum",
+    "scm"
+   ],
+   "oceogeo:kind": "feature",
+   "skos:definition": "A subsurface peak in chlorophyll, typical of stratified, nutrient-poor waters where phytoplankton grow near the nutricline.",
+   "dct:source": [
+    "Cullen (2015) Annu. Rev. Mar. Sci. 7, 207–239"
+   ],
+   "oceogeo:featureOf": [
+    {
+     "@id": "oceogeo:chla"
+    }
+   ],
+   "oceogeo:measuredBy": [
+    {
+     "@id": "oceogeo:chlorophyll_maximum_depth"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:mixed_layer",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Mixed layer",
+   "skos:altLabel": [],
+   "oceogeo:kind": "feature",
+   "skos:definition": "The well-mixed surface layer of nearly uniform temperature and salinity.",
+   "oceogeo:featureOf": [
+    {
+     "@id": "oceogeo:temperature"
+    }
+   ],
+   "oceogeo:measuredBy": [
+    {
+     "@id": "oceogeo:mixed_layer_depth"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:oxygen_minimum_zone",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Oxygen minimum zone",
+   "skos:altLabel": [
+    "omz",
+    "hypoxic",
+    "hypoxia",
+    "suboxic",
+    "low oxygen",
+    "dead zone"
+   ],
+   "oceogeo:kind": "feature",
+   "skos:definition": "A subsurface layer of strongly depleted oxygen, typically 200–1000 m in the eastern tropical Pacific, Arabian Sea and Bay of Bengal.",
+   "oceogeo:method": "Thresholds vary by community: hypoxic < 60 µmol/kg, suboxic < 20 µmol/kg. Report which threshold is used.",
+   "dct:source": [
+    "Paulmier & Ruiz-Pino (2009) Prog. Oceanogr. 80, 113–128"
+   ],
+   "oceogeo:featureOf": [
+    {
+     "@id": "oceogeo:doxy"
+    }
+   ],
+   "oceogeo:measuredBy": [
+    {
+     "@id": "oceogeo:oxygen_minimum"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:temperature_inversion",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Temperature inversion",
+   "skos:altLabel": [
+    "inversion",
+    "inversions",
+    "warmer below",
+    "warming with depth"
+   ],
+   "oceogeo:kind": "feature",
+   "skos:definition": "Temperature increasing with depth over some interval. Stable only when the deeper water is saltier; common below the mixed layer near fronts, sea ice and where warm salty water intrudes beneath fresher water.",
+   "oceogeo:method": "Between consecutive levels below 20 dbar, temperature increases by more than 0.1 °C with depth (small steps are sensor noise).",
+   "dct:source": [
+    "Talley et al. (2011) Descriptive Physical Oceanography"
+   ],
+   "oceogeo:featureOf": [
+    {
+     "@id": "oceogeo:temperature"
+    },
+    {
+     "@id": "oceogeo:salinity"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:thermocline",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Thermocline",
+   "skos:altLabel": [],
+   "oceogeo:kind": "feature",
+   "skos:definition": "The layer where temperature drops rapidly with depth, separating warm surface water from cold deep water.",
+   "oceogeo:featureOf": [
+    {
+     "@id": "oceogeo:temperature"
+    }
+   ],
+   "oceogeo:measuredBy": [
+    {
+     "@id": "oceogeo:thermocline_depth"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:arabian_sea",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Arabian Sea",
+   "skos:altLabel": [],
+   "oceogeo:kind": "region",
+   "oceogeo:latRange": [
+    0,
+    25
+   ],
+   "oceogeo:lonRanges": [
+    [
+     50,
+     78
+    ]
+   ],
+   "skos:broader": [
+    {
+     "@id": "oceogeo:indian_ocean"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:arctic_ocean",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Arctic Ocean",
+   "skos:altLabel": [
+    "arctic",
+    "polar north",
+    "high arctic"
+   ],
+   "oceogeo:kind": "region",
+   "oceogeo:latRange": [
+    66.5,
+    90
+   ],
+   "oceogeo:lonRanges": [
+    [
+     -180,
+     180
+    ]
+   ]
+  },
+  {
+   "@id": "oceogeo:canary_basin",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Canary Basin",
+   "skos:altLabel": [
+    "canary",
+    "canaries",
+    "canary current",
+    "off west africa",
+    "northwest africa"
+   ],
+   "oceogeo:kind": "region",
+   "oceogeo:latRange": [
+    20,
+    36
+   ],
+   "oceogeo:lonRanges": [
+    [
+     -30,
+     -10
+    ]
+   ],
+   "skos:broader": [
+    {
+     "@id": "oceogeo:north_atlantic"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:indian_ocean",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Indian Ocean",
+   "skos:altLabel": [],
+   "oceogeo:kind": "region",
+   "oceogeo:latRange": [
+    -60,
+    30
+   ],
+   "oceogeo:lonRanges": [
+    [
+     20,
+     120
+    ]
+   ]
+  },
+  {
+   "@id": "oceogeo:mediterranean_sea",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Mediterranean Sea",
+   "skos:altLabel": [
+    "the mediterranean",
+    "med sea"
+   ],
+   "oceogeo:kind": "region",
+   "oceogeo:latRange": [
+    30,
+    46
+   ],
+   "oceogeo:lonRanges": [
+    [
+     -6,
+     36
+    ]
+   ]
+  },
+  {
+   "@id": "oceogeo:north_atlantic",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "North Atlantic Ocean",
+   "skos:altLabel": [
+    "north atlantic",
+    "n atlantic",
+    "northern atlantic"
+   ],
+   "oceogeo:kind": "region",
+   "oceogeo:latRange": [
+    0,
+    66
+   ],
+   "oceogeo:lonRanges": [
+    [
+     -80,
+     0
+    ]
+   ]
+  },
+  {
+   "@id": "oceogeo:north_pacific",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "North Pacific Ocean",
+   "skos:altLabel": [
+    "north pacific",
+    "n pacific"
+   ],
+   "oceogeo:kind": "region",
+   "oceogeo:latRange": [
+    0,
+    66
+   ],
+   "oceogeo:lonRanges": [
+    [
+     120,
+     180
+    ],
+    [
+     -180,
+     -100
+    ]
+   ]
+  },
+  {
+   "@id": "oceogeo:south_atlantic",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "South Atlantic Ocean",
+   "skos:altLabel": [
+    "south atlantic",
+    "s atlantic",
+    "southern atlantic"
+   ],
+   "oceogeo:kind": "region",
+   "oceogeo:latRange": [
+    -60,
+    0
+   ],
+   "oceogeo:lonRanges": [
+    [
+     -70,
+     20
+    ]
+   ]
+  },
+  {
+   "@id": "oceogeo:south_pacific",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "South Pacific Ocean",
+   "skos:altLabel": [
+    "south pacific",
+    "s pacific"
+   ],
+   "oceogeo:kind": "region",
+   "oceogeo:latRange": [
+    -60,
+    0
+   ],
+   "oceogeo:lonRanges": [
+    [
+     150,
+     180
+    ],
+    [
+     -180,
+     -70
+    ]
+   ]
+  },
+  {
+   "@id": "oceogeo:southern_ocean",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Southern Ocean",
+   "skos:altLabel": [
+    "antarctic",
+    "antarctica",
+    "antarctic ocean"
+   ],
+   "oceogeo:kind": "region",
+   "oceogeo:latRange": [
+    -90,
+    -60
+   ],
+   "oceogeo:lonRanges": [
+    [
+     -180,
+     180
+    ]
+   ]
+  },
+  {
+   "@id": "oceogeo:bbp700",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Particle backscattering (700 nm)",
+   "skos:altLabel": [
+    "backscatter",
+    "backscattering",
+    "bbp",
+    "bbp700",
+    "particles",
+    "turbidity"
+   ],
+   "oceogeo:kind": "variable",
+   "skos:definition": "Optical backscattering by particles; a proxy for particulate organic carbon.",
+   "oceogeo:unit": "m⁻¹",
+   "oceogeo:argoParameter": "BBP700",
+   "dct:source": [
+    "BGC-Argo User's Manual"
+   ]
+  },
+  {
+   "@id": "oceogeo:cdom",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Coloured dissolved organic matter",
+   "skos:altLabel": [
+    "cdom",
+    "colored dissolved organic matter"
+   ],
+   "oceogeo:kind": "variable",
+   "skos:definition": "Fluorescence of coloured dissolved organic matter.",
+   "oceogeo:unit": "ppb",
+   "oceogeo:argoParameter": "CDOM",
+   "dct:source": [
+    "BGC-Argo User's Manual"
+   ]
+  },
+  {
+   "@id": "oceogeo:chla",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Chlorophyll-a",
+   "skos:altLabel": [
+    "chlorophyll",
+    "chla",
+    "phytoplankton",
+    "chl"
+   ],
+   "oceogeo:kind": "variable",
+   "skos:definition": "Chlorophyll-a concentration, a proxy for phytoplankton biomass.",
+   "oceogeo:unit": "mg/m³",
+   "oceogeo:argoParameter": "CHLA",
+   "skos:exactMatch": {
+    "@id": "http://vocab.nerc.ac.uk/standard_name/mass_concentration_of_chlorophyll_a_in_sea_water/"
+   },
+   "dct:source": [
+    "BGC-Argo User's Manual"
+   ]
+  },
+  {
+   "@id": "oceogeo:density",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Seawater density",
+   "skos:altLabel": [
+    "density",
+    "potential density",
+    "sigma",
+    "sigma0",
+    "sigma-theta",
+    "isopycnal",
+    "isopycnals",
+    "buoyancy"
+   ],
+   "oceogeo:kind": "variable",
+   "skos:definition": "Seawater density, which controls stratification and the depth water sinks to.",
+   "oceogeo:unit": "kg/m³",
+   "dct:source": [
+    "TEOS-10 Manual (IOC, SCOR and IAPSO, 2010)"
+   ],
+   "oceogeo:available": false
+  },
+  {
+   "@id": "oceogeo:doxy",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Dissolved oxygen",
+   "skos:altLabel": [
+    "oxygen",
+    "doxy",
+    "O2",
+    "oxygenation"
+   ],
+   "oceogeo:kind": "variable",
+   "skos:definition": "Dissolved oxygen concentration; reflects air-sea exchange, photosynthesis, respiration and how long ago water left the surface.",
+   "oceogeo:unit": "µmol/kg",
+   "oceogeo:argoParameter": "DOXY",
+   "skos:exactMatch": {
+    "@id": "http://vocab.nerc.ac.uk/standard_name/moles_of_oxygen_per_unit_mass_in_sea_water/"
+   },
+   "dct:source": [
+    "BGC-Argo User's Manual"
+   ]
+  },
+  {
+   "@id": "oceogeo:nitrate",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Nitrate",
+   "skos:altLabel": [
+    "no3",
+    "nutrient",
+    "nutrients"
+   ],
+   "oceogeo:kind": "variable",
+   "skos:definition": "Nitrate concentration, a major nutrient for phytoplankton growth that also traces remineralisation and water-mass history.",
+   "oceogeo:unit": "µmol/kg",
+   "oceogeo:argoParameter": "NITRATE",
+   "skos:exactMatch": {
+    "@id": "http://vocab.nerc.ac.uk/standard_name/moles_of_nitrate_per_unit_mass_in_sea_water/"
+   },
+   "dct:source": [
+    "BGC-Argo User's Manual"
+   ]
+  },
+  {
+   "@id": "oceogeo:ph",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "pH (total scale)",
+   "skos:altLabel": [
+    "ph",
+    "acidity",
+    "acidification",
+    "ocean acidification",
+    "PH_IN_SITU_TOTAL"
+   ],
+   "oceogeo:kind": "variable",
+   "skos:definition": "Seawater acidity, part of the marine carbonate system and the ocean acidification signal.",
+   "oceogeo:unit": "total scale",
+   "oceogeo:argoParameter": "PH_IN_SITU_TOTAL",
+   "skos:exactMatch": {
+    "@id": "http://vocab.nerc.ac.uk/standard_name/sea_water_ph_reported_on_total_scale/"
+   },
+   "dct:source": [
+    "BGC-Argo User's Manual"
+   ]
+  },
+  {
+   "@id": "oceogeo:pressure",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Pressure (depth)",
+   "skos:altLabel": [
+    "pressure",
+    "depth",
+    "dbar",
+    "deep",
+    "deeper",
+    "metres",
+    "meters",
+    "PRES"
+   ],
+   "oceogeo:kind": "variable",
+   "skos:definition": "Sea water pressure; 1 dbar is approximately 1 m of depth, so pressure is used as the depth coordinate. depth_level is an array index, not a depth.",
+   "oceogeo:unit": "dbar",
+   "oceogeo:argoParameter": "PRES",
+   "skos:exactMatch": {
+    "@id": "http://vocab.nerc.ac.uk/standard_name/sea_water_pressure/"
+   },
+   "dct:source": [
+    "Argo Quality Control Manual"
+   ]
+  },
+  {
+   "@id": "oceogeo:salinity",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Salinity",
+   "skos:altLabel": [
+    "salt",
+    "saltiness",
+    "psal",
+    "PSU",
+    "practical salinity"
+   ],
+   "oceogeo:kind": "variable",
+   "skos:definition": "Practical salinity (dissolved salt content). Set at the surface by evaporation minus precipitation, and at depth by water-mass mixing.",
+   "oceogeo:unit": "PSU",
+   "oceogeo:argoParameter": "PSAL",
+   "skos:exactMatch": {
+    "@id": "http://vocab.nerc.ac.uk/standard_name/sea_water_practical_salinity/"
+   },
+   "dct:source": [
+    "TEOS-10 Manual (IOC, SCOR and IAPSO, 2010)"
+   ]
+  },
+  {
+   "@id": "oceogeo:sound_velocity",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Sound speed",
+   "skos:altLabel": [
+    "sound velocity",
+    "speed of sound",
+    "sofar",
+    "SOFAR channel",
+    "acoustic"
+   ],
+   "oceogeo:kind": "variable",
+   "skos:definition": "Speed of sound in seawater, a function of temperature, salinity and pressure; typically 1450–1550 m/s. Its minimum near ~1000 m forms the SOFAR channel, a waveguide for long-range sound.",
+   "oceogeo:unit": "m/s",
+   "dct:source": [
+    "Chen & Millero (1977) J. Acoust. Soc. Am. 62, 1129",
+    "TEOS-10 Manual"
+   ],
+   "oceogeo:available": false
+  },
+  {
+   "@id": "oceogeo:temperature",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Temperature",
+   "skos:altLabel": [
+    "temp",
+    "sea temperature",
+    "water temperature",
+    "thermal"
+   ],
+   "oceogeo:kind": "variable",
+   "skos:definition": "In-situ sea water temperature. With salinity it sets seawater density and therefore stratification.",
+   "oceogeo:unit": "°C",
+   "oceogeo:argoParameter": "TEMP",
+   "skos:exactMatch": {
+    "@id": "http://vocab.nerc.ac.uk/standard_name/sea_water_temperature/"
+   },
+   "dct:source": [
+    "Argo User's Manual",
+    "Talley et al. (2011) Descriptive Physical Oceanography"
+   ]
+  },
+  {
+   "@id": "oceogeo:antarctic_intermediate_water",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Antarctic Intermediate Water (AAIW)",
+   "skos:altLabel": [
+    "antarctic intermediate water",
+    "aaiw",
+    "intermediate water"
+   ],
+   "oceogeo:kind": "water_mass",
+   "skos:definition": "Cool, fresh intermediate water formed near the Subantarctic Front; a local salinity minimum at ~700–1000 dbar. Fresh (34.2–34.5) in the southern oceans; diluted (~35.0–35.2) where it reaches the subtropical North Atlantic.",
+   "dct:source": [
+    "Emery & Meincke (1986)",
+    "Talley et al. (2011) ch. 13"
+   ],
+   "oceogeo:depthRangeDbar": [
+    500,
+    1300
+   ],
+   "oceogeo:foundIn": [
+    {
+     "@id": "oceogeo:southern_ocean"
+    },
+    {
+     "@id": "oceogeo:south_atlantic"
+    },
+    {
+     "@id": "oceogeo:indian_ocean"
+    },
+    {
+     "@id": "oceogeo:south_pacific"
+    },
+    {
+     "@id": "oceogeo:north_atlantic"
+    }
+   ],
+   "oceogeo:identifiedBy": [
+    {
+     "@id": "oceogeo:intermediate_salinity_minimum"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:mediterranean_outflow_water",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Mediterranean Outflow Water (MOW)",
+   "skos:altLabel": [
+    "mediterranean outflow water",
+    "mediterranean water",
+    "mow",
+    "meddy",
+    "meddies",
+    "mediterranean outflow"
+   ],
+   "oceogeo:kind": "water_mass",
+   "skos:definition": "Warm, salty intermediate water from the Strait of Gibraltar spreading into the eastern North Atlantic at ~1000 m. Shows as a local salinity maximum near 1000–1300 dbar: strong (> 36 PSU) near the Gulf of Cadiz, diluted to ~35.2–35.5 PSU in the Canary Basin and further away.",
+   "dct:source": [
+    "Emery & Meincke (1986)",
+    "Talley et al. (2011) ch. 9"
+   ],
+   "oceogeo:depthRangeDbar": [
+    600,
+    1600
+   ],
+   "oceogeo:foundIn": [
+    {
+     "@id": "oceogeo:north_atlantic"
+    }
+   ],
+   "oceogeo:identifiedBy": [
+    {
+     "@id": "oceogeo:intermediate_salinity_maximum"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:north_atlantic_central_water",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "North Atlantic Central Water (NACW)",
+   "skos:altLabel": [
+    "north atlantic central water",
+    "central water",
+    "nacw",
+    "enacw",
+    "thermocline water"
+   ],
+   "oceogeo:kind": "water_mass",
+   "skos:definition": "The thermocline water of the subtropical North Atlantic: an almost linear temperature–salinity relation between ~8 °C/35.0 and ~19 °C/36.7 in the upper few hundred metres.",
+   "dct:source": [
+    "Emery & Meincke (1986)",
+    "Talley et al. (2011) ch. 9"
+   ],
+   "oceogeo:depthRangeDbar": [
+    100,
+    700
+   ],
+   "oceogeo:foundIn": [
+    {
+     "@id": "oceogeo:north_atlantic"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:north_atlantic_deep_water",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "North Atlantic Deep Water (NADW)",
+   "skos:altLabel": [
+    "north atlantic deep water",
+    "nadw",
+    "deep water"
+   ],
+   "oceogeo:kind": "water_mass",
+   "skos:definition": "Cold, relatively salty deep water formed in the Nordic and Labrador Seas. Core Argo floats (2000 dbar) only sample its upper part.",
+   "dct:source": [
+    "Emery & Meincke (1986)",
+    "Talley et al. (2011) ch. 9"
+   ],
+   "oceogeo:depthRangeDbar": [
+    1500,
+    4000
+   ],
+   "oceogeo:foundIn": [
+    {
+     "@id": "oceogeo:north_atlantic"
+    },
+    {
+     "@id": "oceogeo:south_atlantic"
+    }
+   ]
+  },
+  {
+   "@id": "oceogeo:subantarctic_mode_water",
+   "@type": "skos:Concept",
+   "skos:inScheme": "oceogeo:scheme",
+   "skos:prefLabel": "Subantarctic Mode Water (SAMW)",
+   "skos:altLabel": [
+    "subantarctic mode water",
+    "samw",
+    "mode water"
+   ],
+   "oceogeo:kind": "water_mass",
+   "skos:definition": "A thick, weakly stratified layer formed by deep winter mixing just north of the Subantarctic Front; shows as a thermostad (small vertical temperature gradient) in the upper ~600 m.",
+   "dct:source": [
+    "Talley et al. (2011) ch. 13"
+   ],
+   "oceogeo:depthRangeDbar": [
+    200,
+    700
+   ],
+   "oceogeo:foundIn": [
+    {
+     "@id": "oceogeo:southern_ocean"
+    },
+    {
+     "@id": "oceogeo:indian_ocean"
+    },
+    {
+     "@id": "oceogeo:south_pacific"
+    },
+    {
+     "@id": "oceogeo:south_atlantic"
+    }
+   ]
+  }
+ ]
+}
