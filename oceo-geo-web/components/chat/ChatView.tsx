@@ -9,6 +9,7 @@ import {
 } from "@/lib/actions/chat";
 import type { ChartPayload } from "@/types";
 import ChartRenderer from "@/components/charts/ChartRenderer";
+import Markdown from "@/components/chat/Markdown";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -125,8 +126,12 @@ function AssistantMessage({ message }: { message: ChatViewMessage }) {
         }`}
       >
         {/* Prose content */}
-        <div className="font-serif text-[15px] leading-relaxed text-[#3D4A58] whitespace-pre-wrap">
-          {message.content}
+        <div className="font-serif text-[15px] leading-relaxed text-[#3D4A58]">
+          {message.error ? (
+            <span className="whitespace-pre-wrap">{message.content}</span>
+          ) : (
+            <Markdown>{message.content}</Markdown>
+          )}
         </div>
 
         {/* Chart rendering — inline in the chat bubble */}
