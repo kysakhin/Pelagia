@@ -159,7 +159,7 @@ GLOBAL_RESULT_STORE = ResultStore()
 # ---------------------------------------------------------------------------
 
 _ALLOWED_CHART_TYPES = {
-    "scatter", "line", "bar", "histogram", "pie", "area",
+    "scatter", "line", "bar", "histogram", "pie", "area", "map",
 }
 # "heatmap" and "boxplot" are Phase 5 stubs — excluded here so the agent can
 # never emit them and trigger an error boundary on the frontend.
@@ -287,7 +287,7 @@ class ChartPayloadService:
                     "pie requires encoding.color (category) and encoding.y (value)"
                 )
         else:
-            # scatter, line, bar, area, boxplot
+            # scatter, line, bar, area, boxplot, map (x=longitude, y=latitude)
             if not (x and y):
                 raise ChartSpecError(
                     f"{chart_type} requires encoding.x and encoding.y"

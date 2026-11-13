@@ -63,6 +63,56 @@ class SQLAgentNoQueryError(RuntimeError):
     """Raised when the SQL agent does not produce an executable query."""
 
 
+# ── Conversation history (follow-up questions) ──────────────────────────────
+# Only the most recent turns are sent; long assistant replies and SQL are
+# truncated so history never dominates the prompt.
+_HISTORY_MAX_TURNS = 6
+_HISTORY_CONTENT_CHARS = 600
+_HISTORY_SQL_CHARS = 1500
+
+
+def format_history(history: list[dict] | None) -> str:
+    """Render recent conversation turns as a plain-text block for agent input.
+
+    Each turn is a dict with ``role`` ("user" | "assistant"), ``content`` and
+    optionally ``intent`` / ``sql_query``. Returns "" when there is no history.
+    """
+    if not history:
+        return ""
+    lines: list[str] = []
+    for turn in history[-_HISTORY_MAX_TURNS:]:
+        role = turn.get("role")
+        content = (turn.get("content") or "").strip()
+        if len(content) > _HISTORY_CONTENT_CHARS:
+            content = content[:_HISTORY_CONTENT_CHARS] + " …"
+        if role == "user":
+            lines.append(f"User: {content}")
+        elif role == "assistant":
+            lines.append(f"Assistant: {content}")
+            sql = (turn.get("sql_query") or "").strip()
+            if sql:
+                if len(sql) > _HISTORY_SQL_CHARS:
+                    sql = sql[:_HISTORY_SQL_CHARS] + " …"
+                lines.append(f"[SQL the assistant ran for that answer]\n{sql}")
+    return "\n".join(lines)
+
+
+def with_history(message: str, history_text: str) -> str:
+    """Prefix the current message with recent conversation context.
+
+    Agents are stateless between requests, so follow-ups like "now do that
+    for salinity" only make sense if the previous turns travel with them.
+    """
+    if not history_text:
+        return message
+    return (
+        "Recent conversation (for context — resolve references like \"that\", "
+        "\"same\", \"those profiles\", \"now for salinity\" against it):\n"
+        f"{history_text}\n\n"
+        f"Current question: {message}"
+    )
+
+
 def _infer_chart_spec(message: str, result_id: str | None, columns: list[dict]) -> dict | None:
     """Best-effort chart spec fallback when the model ran SQL but skipped viz."""
     if not result_id:
@@ -77,6 +127,21 @@ def _infer_chart_spec(message: str, result_id: str | None, columns: list[dict]) 
             if candidate in column_set:
                 return candidate
         return None
+
+    map_words = ("map", "trajectory", "track", "where has", "where did", "where was", "positions", "locations")
+    if any(w in msg for w in map_words) and {"latitude", "longitude"}.issubset(column_set):
+        spec = {
+            "result_id": result_id,
+            "chart_type": "map",
+            "title": "Float positions",
+            "encoding": {"x": "longitude", "y": "latitude"},
+        }
+        color = first_available(("observed_at", "surface_temperature"))
+        if color:
+            spec["encoding"]["color"] = color
+        if "file_id" in column_set:
+            spec["encoding"]["series"] = "file_id"
+        return spec
 
     if "histogram" in msg or "distribution" in msg:
         x = first_available(("salinity", "temperature", "pressure")) or (column_ids[0] if column_ids else None)
@@ -302,7 +367,7 @@ def make_model(max_tokens: int, reasoning_effort: str | None = None) -> Model:
     )
 
 
-def classify_intent(message: str, system_message: str) -> str:
+def classify_intent(message: str, system_message: str, history_text: str = "") -> str:
     """Use a lightweight agent to classify the user message as
     SQL, DOMAIN, CONTEXT, or OFF_TOPIC."""
     agent = Agent(
@@ -310,7 +375,7 @@ def classify_intent(message: str, system_message: str) -> str:
         system_message=system_message,
         markdown=False,
     )
-    response = agent.run(message)
+    response = agent.run(with_history(message, history_text))
     raw = (response.content or "").strip().upper()
     raw = raw.replace("-", "_").replace(" ", "_")
 
@@ -353,6 +418,7 @@ def run_sql_agent(
     *,
     result_store: ResultStore | None = None,
     chart_payload_service: ChartPayloadService | None = None,
+    history_text: str = "",
 ) -> dict:
     """Generate a SQL query via the agent, execute it through the SQL tool,
     optionally produce a chart_spec, and compose a chart_payload outside the
@@ -402,7 +468,10 @@ def run_sql_agent(
         markdown=False,
     )
 
-    last_response = agent.run(message)
+    # The agent sees recent turns (incl. previous SQL) so follow-ups work; the
+    # summary step below still uses the bare question.
+    agent_input = with_history(message, history_text)
+    last_response = agent.run(agent_input)
     outcome = _extract_sql_outcome(last_response, store, sql_tool)
 
     # The model sometimes emits a malformed viz tool call (e.g.
@@ -413,7 +482,7 @@ def run_sql_agent(
             "SQL agent produced no query on first attempt; retrying once with emphasis"
         )
         last_response = agent.run(
-            message
+            agent_input
             + "\n\nIMPORTANT: First call the run_sql_query tool with a single "
             "SELECT query. Do NOT return SQL as plain text and do NOT call "
             "create_visualization_spec before running the query."
@@ -429,7 +498,7 @@ def run_sql_agent(
             outcome["sql_error"], attempt, _SQL_CORRECTION_ATTEMPTS,
         )
         last_response = agent.run(
-            _correction_message(message, outcome["query"], outcome["sql_error"])
+            _correction_message(agent_input, outcome["query"], outcome["sql_error"])
         )
         corrected = _extract_sql_outcome(last_response, store, sql_tool)
         if corrected["sql_result"] is None and not corrected["query"]:
@@ -548,18 +617,20 @@ def run_sql_agent(
     }
 
 
-def run_domain_agent(message: str, system_message: str) -> str:
+def run_domain_agent(message: str, system_message: str, history_text: str = "") -> str:
     """Answer a general oceanographic / geospatial question."""
     agent = Agent(
         model=make_model(1000, reasoning_effort=_SUMMARY_REASONING),
         system_message=system_message,
         markdown=True,
     )
-    response = agent.run(message)
+    response = agent.run(with_history(message, history_text))
     return (response.content or "").strip()
 
 
-def run_context_agent(message: str, context: dict | None, system_message: str) -> str:
+def run_context_agent(
+    message: str, context: dict | None, system_message: str, history_text: str = ""
+) -> str:
     """Answer a question about a specific variable or chart pattern using the
     Ground Truth glossary."""
 
@@ -592,5 +663,5 @@ def run_context_agent(message: str, context: dict | None, system_message: str) -
         markdown=True,
     )
 
-    response = agent.run(message)
+    response = agent.run(with_history(message, history_text))
     return (response.content or "").strip()

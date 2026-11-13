@@ -77,12 +77,12 @@ Call `create_visualization_spec` when the user asks to plot/show/visualize/compa
 ```ts
 type ChartSpec = {
   result_id: string;        // from the successful run_sql_query call
-  chart_type: "scatter" | "line" | "bar" | "histogram" | "pie" | "area";
+  chart_type: "scatter" | "line" | "bar" | "histogram" | "pie" | "area" | "map";
   title: string;
   encoding: {
-    x?: string;             // exact column id from the result
-    y?: string;             // exact column id from the result
-    color?: string;         // pie: category column
+    x?: string;             // exact column id from the result (map: longitude)
+    y?: string;             // exact column id from the result (map: latitude)
+    color?: string;         // pie: category column; map: numeric/time column for the colour scale
     series?: string;        // one line/point group per distinct value (e.g. profile_id)
   };
   labels?: { x?: string; y?: string; color?: string };   // human labels with units
@@ -92,6 +92,7 @@ type ChartSpec = {
     show_legend?: boolean;
     show_regression?: boolean;
     bin_count?: number;     // histogram only
+    show_track?: boolean;   // map only: connect points in row order (default true)
   };
 };
 ```
@@ -103,6 +104,7 @@ type ChartSpec = {
 | two variables (e.g. T–S diagram) | `scatter` |
 | distribution of one variable | `histogram`, x = that variable, set `bin_count` |
 | counts per category | `bar` (or `pie` with `color` + `y`) |
+| where the float(s) went / positions / trajectory / "on a map" | `map`, x = longitude, y = latitude, `color` = observed_at (or a value like surface_temperature), `series` = file_id when several floats; ORDER BY observed_at |
 
 ## Examples
 
@@ -286,7 +288,15 @@ FROM project_parameters
 ORDER BY parameter_name
 ```
 
-### 16. Profile counts by data mode (bar)
+### 16. Float trajectory on a map (map: x = longitude, y = latitude, color = observed_at, series = file_id)
+```sql
+SELECT file_id, profile_id, cycle_number, observed_at, latitude, longitude, surface_temperature
+FROM profile_summary
+WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+ORDER BY file_id, observed_at
+```
+
+### 17. Profile counts by data mode (bar)
 ```sql
 SELECT data_mode, COUNT(*) AS profile_count
 FROM profile_summary

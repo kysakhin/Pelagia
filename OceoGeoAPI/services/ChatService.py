@@ -5,6 +5,7 @@ from services.NeondbService import NeonDBService
 from core.chatbot import (
     SQLAgentNoQueryError,
     classify_intent,
+    format_history,
     run_sql_agent,
     run_domain_agent,
     run_context_agent,
@@ -33,7 +34,14 @@ class ChatService:
         self.domain_prompt = _load_prompt("domain_prompt.md")
         self.context_prompt = _load_prompt("context_prompt.md")
 
-    def process_message(self, message: str, user_id: str, project_id: int, context: dict | None = None) -> dict:
+    def process_message(
+        self,
+        message: str,
+        user_id: str,
+        project_id: int,
+        context: dict | None = None,
+        history: list[dict] | None = None,
+    ) -> dict:
         """
         Classify the message intent and route to the appropriate agent.
 
@@ -53,8 +61,11 @@ class ChatService:
         else:
             intent_prompt_with_hint = self.intent_prompt
 
+        # Recent turns let every agent resolve follow-ups ("now for salinity").
+        history_text = format_history(history)
+
         try:
-            intent = classify_intent(message, intent_prompt_with_hint)
+            intent = classify_intent(message, intent_prompt_with_hint, history_text)
         except Exception as exc:
             logger.exception("Intent classification failed")
             return self._ai_error_response(exc)
@@ -67,6 +78,7 @@ class ChatService:
                     project_id=project_id,
                     system_message=self.sql_prompt,
                     db=self.db,
+                    history_text=history_text,
                 )
                 return {"intent": "SQL", **result}
             except Exception as exc:
@@ -75,7 +87,7 @@ class ChatService:
 
         if intent == "DOMAIN":
             try:
-                response = run_domain_agent(message, self.domain_prompt)
+                response = run_domain_agent(message, self.domain_prompt, history_text)
                 return {"intent": "DOMAIN", "response": response}
             except Exception as exc:
                 logger.exception("Domain agent failed")
@@ -83,7 +95,9 @@ class ChatService:
 
         if intent == "CONTEXT":
             try:
-                response = run_context_agent(message, context, self.context_prompt)
+                response = run_context_agent(
+                    message, context, self.context_prompt, history_text
+                )
                 return {"intent": "CONTEXT", "response": response}
             except Exception as exc:
                 logger.exception("Context agent failed")
