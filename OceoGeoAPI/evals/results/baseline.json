@@ -1,0 +1,570 @@
+{
+ "summary": {
+  "label": "baseline",
+  "model": "opencode/muse-spark-1.3",
+  "timestamp": "2026-11-13 22:23:51",
+  "questions": 25,
+  "passed": 22,
+  "pass_rate": 0.88,
+  "median_secs": 24.2,
+  "mean_input_tokens": 22121,
+  "mean_output_tokens": 1825,
+  "mean_llm_calls": 3,
+  "wall_secs": 161.2
+ },
+ "results": [
+  {
+   "id": "p8_count_profiles",
+   "project": 8,
+   "question": "How many profiles are in this project?",
+   "passed": true,
+   "fails": [],
+   "secs": 10.7,
+   "llm_calls": 3,
+   "input_tokens": 9680,
+   "output_tokens": 296,
+   "intent": "SQL",
+   "sql": "SELECT COUNT(*) AS profile_count FROM profile_summary",
+   "columns": [
+    "profile_count"
+   ],
+   "row_count": 1,
+   "chart_type": null,
+   "answer": "This project contains **25 profiles**."
+  },
+  {
+   "id": "p8_avg_temp_deep",
+   "project": 8,
+   "question": "What is the average temperature below 1000 dbar?",
+   "passed": true,
+   "fails": [],
+   "secs": 12.9,
+   "llm_calls": 3,
+   "input_tokens": 9715,
+   "output_tokens": 428,
+   "intent": "SQL",
+   "sql": "SELECT AVG(temperature) AS avg_temperature FROM obs WHERE pressure > 1000 AND temperature IS NOT NULL",
+   "columns": [
+    "avg_temperature"
+   ],
+   "row_count": 1,
+   "chart_type": null,
+   "answer": "The average temperature below 1000 dbar is approximately 5.41 \u00b0C."
+  },
+  {
+   "id": "p8_latest_profile_plot",
+   "project": 8,
+   "question": "Plot the temperature profile of the most recent profile",
+   "passed": true,
+   "fails": [],
+   "secs": 18.1,
+   "llm_calls": 3,
+   "input_tokens": 19817,
+   "output_tokens": 844,
+   "intent": "SQL",
+   "sql": "WITH recent AS (\n  SELECT profile_id\n  FROM profile_summary\n  ORDER BY observed_at DESC\n  LIMIT 1\n)\nSELECT o.profile_id, o.pressure, o.temperature, o.observed_at, o.cycle_number\nFROM obs o\nJOIN recent r ON r.profile_id = o.profile_id\nWHERE o.temperature IS NOT NULL AND o.pressure IS NOT NULL\nORDER BY o.pressure",
+   "columns": [
+    "profile_id",
+    "pressure",
+    "temperature",
+    "observed_at",
+    "cycle_number"
+   ],
+   "row_count": 61,
+   "chart_type": "line",
+   "answer": "The most recent profile is Profile 49 (Cycle 25), observed on 2002-11-10.\n\nThe temperature profile shows a typical warm surface to cold deep structure:\n\n* Surface (4.2 dbar) is warm at ~24.18\u00b0C, with a well-mixed layer down to about 56.0 dbar.\n* Temperature then drops sharply through the thermocline, from ~23.97\u00b0C at 65.9 dbar to ~20.13\u00b0C at 95.3 dbar.\n* Below that, temperature decreases steadily with depth, reaching ~4.15\u00b0C at ~1995.0 dbar.\n\nA plot of temperature (\u00b0C) vs. pressure (dbar) would show a warm surface cap, a sharp thermocline around 65-115 dbar, and a gradual deep cooling to 2000 "
+  },
+  {
+   "id": "p8_mld_time",
+   "project": 8,
+   "question": "How has the mixed layer depth changed over time? Plot it.",
+   "passed": true,
+   "fails": [],
+   "secs": 21.7,
+   "llm_calls": 3,
+   "input_tokens": 17699,
+   "output_tokens": 1310,
+   "intent": "SQL",
+   "sql": "WITH ref AS (\n  SELECT DISTINCT ON (profile_id) profile_id, temperature AS ref_temperature\n  FROM obs\n  WHERE pressure BETWEEN 5 AND 15 AND temperature IS NOT NULL\n  ORDER BY profile_id, ABS(pressure - 10)\n),\nmld AS (\n  SELECT o.profile_id, MIN(o.pressure) AS mixed_layer_depth\n  FROM obs o\n  JOIN ref r ON r.profile_id = o.profile_id\n  WHERE o.pressure > 10 AND o.temperature IS NOT NULL AND o.temperature < r.ref_temperature - 0.2\n  GROUP BY o.profile_id\n)\nSELECT ps.observed_at, ps.cycle_number, ps.profile_id, m.mixed_layer_depth\nFROM mld m\nJOIN profile_summary ps ON ps.profile_id = m.profile_id\nORDER BY ps.observed_at",
+   "columns": [
+    "observed_at",
+    "cycle_number",
+    "profile_id",
+    "mixed_layer_depth"
+   ],
+   "row_count": 25,
+   "chart_type": "line",
+   "answer": "The time-series shows mixed layer depth from March to November 2002 (25 profiles, cycles 1-25).\n\nThe mixed layer starts deep at ~97 m in mid-March, then shoals through April to ~46 m.\n\nThrough summer (May to September) it remains variable, generally between ~27 m and ~96 m, with most values in the 36-67 m range.\n\nA minimum of ~17 m is seen in early October, followed by re-deepening to ~66 m by late October-November.\n\nOverall, the chart shows a seasonal shoaling from spring into summer-autumn, with short-term variability, then autumn deepening."
+  },
+  {
+   "id": "p8_map",
+   "project": 8,
+   "question": "Where has the float been? Show it on a map.",
+   "passed": true,
+   "fails": [],
+   "secs": 24.5,
+   "llm_calls": 3,
+   "input_tokens": 18935,
+   "output_tokens": 1497,
+   "intent": "SQL",
+   "sql": "SELECT file_id, profile_id, cycle_number, observed_at, latitude, longitude, surface_temperature FROM profile_summary WHERE latitude IS NOT NULL AND longitude IS NOT NULL ORDER BY file_id, observed_at LIMIT 500",
+   "columns": [
+    "file_id",
+    "profile_id",
+    "cycle_number",
+    "observed_at",
+    "latitude",
+    "longitude",
+    "surface_temperature"
+   ],
+   "row_count": 25,
+   "chart_type": "map",
+   "answer": "The float made 25 profiles from mid-March to early November 2002, cycling about every 10 days.\n\nIt stayed in the eastern subtropical Atlantic, off northwest Africa, drifting slowly in a small looping track between about 23.1 - 25.8\u00b0N and 22.1 - 21.0\u00b0W.\n\nIt started near 24.3\u00b0N, 22.1\u00b0W in March, drifted south-east to about 23.1\u00b0N, 21.1\u00b0W by late April, then looped back north-west through the summer, ending near 25.8\u00b0N, 21.9\u00b0W in November.\n\nSurface temperature warmed seasonally along the track from about 20.8\u00b0C in March to about 24.2\u00b0C in November, peaking around 25.2\u00b0C in early October.\n\nA map c"
+  },
+  {
+   "id": "p8_ts_diagram",
+   "project": 8,
+   "question": "Show me a T-S diagram",
+   "passed": true,
+   "fails": [],
+   "secs": 24.0,
+   "llm_calls": 3,
+   "input_tokens": 18153,
+   "output_tokens": 1248,
+   "intent": "SQL",
+   "sql": "SELECT temperature, salinity, pressure FROM obs WHERE temperature IS NOT NULL AND salinity IS NOT NULL AND pressure IS NOT NULL ORDER BY RANDOM() LIMIT 1000",
+   "columns": [
+    "temperature",
+    "salinity",
+    "pressure"
+   ],
+   "row_count": 1000,
+   "chart_type": "scatter",
+   "answer": "Here's your T-S diagram data:\n\nThe chart shows Temperature vs. Salinity, color-coded by Pressure, covering the full water column from the surface to ~2000 dbar.\n\n* **Surface waters ( <100 dbar):** Warm and salty - 19 to 24.2\u00b0C, 36.7 to 37.15 PSU\n* **Thermocline ( ~200-600 dbar):** 10.5 to 17.2\u00b0C, 35.45 to 36.38 PSU\n* **Intermediate / Deep waters ( >800 dbar):** Cold and fresher - 3.9 to 8.7\u00b0C, 35.04 to 35.24 PSU\n\nThe curve shows classic subtropical stratification, with temperature decreasing and salinity decreasing with depth from ~1996 dbar up to the surface."
+  },
+  {
+   "id": "p8_thermocline",
+   "project": 8,
+   "question": "At what depth is the thermocline in each profile?",
+   "passed": true,
+   "fails": [],
+   "secs": 24.2,
+   "llm_calls": 3,
+   "input_tokens": 18441,
+   "output_tokens": 2135,
+   "intent": "SQL",
+   "sql": "WITH grad AS (\n  SELECT profile_id, cycle_number, observed_at, pressure,\n         (LAG(temperature) OVER w - temperature)\n           / NULLIF(pressure - LAG(pressure) OVER w, 0) AS dtdp\n  FROM obs\n  WHERE temperature IS NOT NULL AND pressure IS NOT NULL\n  WINDOW w AS (PARTITION BY profile_id ORDER BY pressure)\n)\nSELECT DISTINCT ON (profile_id)\n       profile_id, cycle_number, observed_at, pressure AS thermocline_depth, dtdp AS max_gradient\nFROM grad\nWHERE dtdp IS NOT NULL\nORDER BY profile_id, dtdp DESC",
+   "columns": [
+    "profile_id",
+    "cycle_number",
+    "observed_at",
+    "thermocline_depth",
+    "max_gradient"
+   ],
+   "row_count": 25,
+   "chart_type": "line",
+   "answer": "Thermocline depth was identified in 25 profiles from mid-March to early November 2002 (cycles 1 to 25).\n\n* **Early period (March - May):** The thermocline is relatively deep, generally between ~97 and ~177 dbar, with maximum temperature gradients of ~0.04 to 0.07 \u00b0C per dbar.\n* **Summer to fall shoaling (June - November):** The thermocline shoals markedly to ~47 to ~77 dbar, and strengthens.\n  * Shallowest is ~46.8 dbar on Aug 2 (cycle 16).\n  * Deepest in this period is ~96.7 dbar on Jun 23 (cycle 11).\n  * Maximum gradients increase to ~0.07 to 0.24 \u00b0C per dbar, peaking at ~0.24 \u00b0C per dbar on"
+  },
+  {
+   "id": "p8_mow",
+   "project": 8,
+   "question": "Is there Mediterranean Outflow Water in this data?",
+   "passed": true,
+   "fails": [],
+   "secs": 70.5,
+   "llm_calls": 3,
+   "input_tokens": 55122,
+   "output_tokens": 5076,
+   "intent": "SQL",
+   "sql": "SELECT temperature, salinity, pressure FROM obs WHERE temperature IS NOT NULL AND salinity IS NOT NULL AND pressure IS NOT NULL LIMIT 5000",
+   "columns": [
+    "temperature",
+    "salinity",
+    "pressure"
+   ],
+   "row_count": 1524,
+   "chart_type": "scatter",
+   "answer": "Yes \u2014 there is a weak signal consistent with diluted Mediterranean Outflow Water.\n\nThe profiles show:\n\n* Warm, salty surface water around 20.8 \u00b0C, 36.97 PSU in the upper ~50 dbar\n* Steady decrease in temperature and salinity with depth to about 800-900 dbar, reaching ~7.6-8.0 \u00b0C, ~35.16-35.18 PSU\n\n* A subtle intermediate salinity maximum between about 1150 and 1350 dbar, with ~6.1 to 6.6 \u00b0C, ~35.22 to 35.24 PSU, peaking near 1300 dbar\n\n* Below that, temperature and salinity decrease again to deep water around 3.9 \u00b0C, 35.04 PSU near 2000 dbar\n\nThat mid-depth warm / salty bulge at ~1000-1350 dba"
+  },
+  {
+   "id": "p8_salinity_max",
+   "project": 8,
+   "question": "Below 500 m, where is the salinity maximum in each profile and how salty is it?",
+   "passed": false,
+   "fails": [
+    "min_pressure range [3.6, 4.6] outside [600, 1600]"
+   ],
+   "secs": 43.0,
+   "llm_calls": 3,
+   "input_tokens": 26786,
+   "output_tokens": 2863,
+   "intent": "SQL",
+   "sql": "SELECT profile_id, cycle_number, observed_at, n_levels, min_pressure, max_pressure FROM profile_summary ORDER BY observed_at LIMIT 30",
+   "columns": [
+    "profile_id",
+    "cycle_number",
+    "observed_at",
+    "n_levels",
+    "min_pressure",
+    "max_pressure"
+   ],
+   "row_count": 25,
+   "chart_type": "line",
+   "answer": "The results do not contain the deep salinity maximum \u2014 they show profile coverage only.\n\nWhat is returned is a set of 25 profiles, cycles 1 through 25, observed from March 15, 2002 to November 10, 2002.\n\nEach profile has:\n* ~60-61 vertical levels\n* near-surface start around 3.6 to 4.6 dbar\n* deep end around 1,946 to 1,997 dbar, typically near 1,996 dbar\n\nTo answer where the salinity maximum below 500 m is and how salty it is in PSU, the query would need to return per-profile maximum salinity with its pressure in dbar."
+  },
+  {
+   "id": "p8_surface_temp_hist",
+   "project": 8,
+   "question": "Show the distribution of surface temperature",
+   "passed": true,
+   "fails": [],
+   "secs": 16.1,
+   "llm_calls": 3,
+   "input_tokens": 14892,
+   "output_tokens": 731,
+   "intent": "SQL",
+   "sql": "SELECT surface_temperature FROM profile_summary WHERE surface_temperature IS NOT NULL LIMIT 5000",
+   "columns": [
+    "surface_temperature"
+   ],
+   "row_count": 25,
+   "chart_type": "histogram",
+   "answer": "Surface temperature shows a range from about **20.8\u00b0C to 25.2\u00b0C**.\n\nMost values start around 21-22\u00b0C and trend upward toward 23-24.5\u00b0C, with a peak near 25.2\u00b0C.\n\nA distribution chart of this would show a steady warming shift from the low-20s \u00b0C into the mid-20s \u00b0C."
+  },
+  {
+   "id": "p8_no_oxygen",
+   "project": 8,
+   "question": "Plot dissolved oxygen vs depth",
+   "passed": true,
+   "fails": [],
+   "secs": 22.4,
+   "llm_calls": 3,
+   "input_tokens": 14346,
+   "output_tokens": 1140,
+   "intent": "SQL",
+   "sql": "SELECT COUNT(*) AS total_obs, COUNT(extras) AS obs_with_extras, COUNT(*) FILTER (WHERE extras IS NOT NULL AND extras::text <> '{}') AS obs_with_nonempty_extras FROM obs",
+   "columns": [
+    "total_obs",
+    "obs_with_extras",
+    "obs_with_nonempty_extras"
+   ],
+   "row_count": 1,
+   "chart_type": null,
+   "answer": "I looked for data to plot dissolved oxygen vs depth.\n\nThere are **1524 total observations** in the query area, but **none of them contain extra sensor data** \u2014 so no dissolved oxygen values are available to plot.\n\nTo make this chart, we would need CTD profiles with dissolved oxygen included. Would you like me to check a wider area or a different time period?"
+  },
+  {
+   "id": "p8_seasonal_change",
+   "project": 8,
+   "question": "How much did the surface temperature change between March and November?",
+   "passed": true,
+   "fails": [],
+   "secs": 28.9,
+   "llm_calls": 3,
+   "input_tokens": 31728,
+   "output_tokens": 1840,
+   "intent": "SQL",
+   "sql": "SELECT\n  (SELECT AVG(surface_temperature) FROM profile_summary WHERE observed_at >= '2002-03-01' AND observed_at < '2002-04-01') AS march_avg_sst,\n  (SELECT AVG(surface_temperature) FROM profile_summary WHERE observed_at >= '2002-11-01' AND observed_at < '2002-12-01') AS nov_avg_sst,\n  (SELECT surface_temperature FROM profile_summary ORDER BY observed_at ASC LIMIT 1) AS first_profile_sst,\n  (SELECT observed_at FROM profile_summary ORDER BY observed_at ASC LIMIT 1) AS first_obs,\n  (SELECT surface_temperature FROM profile_summary ORDER BY observed_at DESC LIMIT 1) AS last_profile_sst,\n  (SELECT observed_at FROM profile_summary ORDER BY observed_at DESC LIMIT 1) AS last_obs",
+   "columns": [
+    "march_avg_sst",
+    "nov_avg_sst",
+    "first_profile_sst",
+    "first_obs",
+    "last_profile_sst",
+    "last_obs"
+   ],
+   "row_count": 1,
+   "chart_type": "line",
+   "answer": "Surface temperature warmed by about **3.39 \u00b0C** between March and November.\n\nAverage SST in March was about **20.79 \u00b0C** (first profile on March 15, 2002: 20.75 \u00b0C), increasing to an average of about **24.18 \u00b0C** in November (last profile on Nov 10, 2002: 24.18 \u00b0C)."
+  },
+  {
+   "id": "p8_isotherm",
+   "project": 8,
+   "question": "Show the depth of the 10\u00b0C isotherm over time",
+   "passed": true,
+   "fails": [],
+   "secs": 27.8,
+   "llm_calls": 3,
+   "input_tokens": 26584,
+   "output_tokens": 2010,
+   "intent": "SQL",
+   "sql": "WITH ordered AS (\n  SELECT profile_id, cycle_number, observed_at, pressure, temperature,\n         LAG(temperature) OVER (PARTITION BY profile_id ORDER BY pressure) AS prev_temp,\n         LAG(pressure) OVER (PARTITION BY profile_id ORDER BY pressure) AS prev_press\n  FROM obs\n  WHERE temperature IS NOT NULL AND pressure IS NOT NULL\n),\ncrossings AS (\n  SELECT profile_id, cycle_number, observed_at, pressure, temperature, prev_temp, prev_press,\n         CASE WHEN temperature = prev_temp THEN pressure\n              ELSE prev_press + (10 - prev_temp) * (pressure - prev_press) / NULLIF(temperature - prev_temp, 0)\n         END AS isotherm_pressure\n  FROM ordered\n  WHERE prev_temp IS NOT NULL AND prev_press IS NOT NULL\n    AND ((prev_temp >= 10 AND temperature <= 10) OR (prev_temp <= 10 AND temperature >= 10))\n),\nper_profile AS (\n  SELECT DISTINCT ON (profile_id)\n         profile_id, cycle_number, observed_at,\n         isotherm_pressure AS isotherm_depth\n  FROM crossings\n  WHERE isotherm_pressure IS NOT NULL AND isotherm_pressure >= 0\n  ORDER BY profile_id, isotherm_pressure\n)\nSELECT profile_id, cycle_number, observed_at, isotherm_depth\nFROM per_profile\nORDER BY observed_at",
+   "columns": [
+    "profile_id",
+    "cycle_number",
+    "observed_at",
+    "isotherm_depth"
+   ],
+   "row_count": 25,
+   "chart_type": "line",
+   "answer": "The 10\u00b0C isotherm depth was tracked over 25 profiles from March to November 2002.\n\nThe isotherm generally sits between about 640 and 675 dbar, with an overall average near 660 dbar.\n\n* Shallowest observation was ~618 dbar in early June 2002 (cycle 9)\n* Deepest observation was ~696 dbar in mid-October 2002 (cycle 22)\n\nA chart of depth vs. time shows relatively stable conditions through spring around 640-660 dbar, a slight deepening through summer to around 660-680 dbar in August-September, and more variability in October-November with the deepest values near 674-696 dbar."
+  },
+  {
+   "id": "p8_two_depths",
+   "project": 8,
+   "question": "Compare temperature at 100 m and at 500 m across all profiles",
+   "passed": true,
+   "fails": [],
+   "secs": 37.9,
+   "llm_calls": 3,
+   "input_tokens": 29757,
+   "output_tokens": 2626,
+   "intent": "SQL",
+   "sql": "WITH t100 AS (\n  SELECT DISTINCT ON (profile_id)\n         profile_id, temperature AS temperature_obs\n  FROM obs\n  WHERE pressure BETWEEN 80 AND 120 AND temperature IS NOT NULL\n  ORDER BY profile_id, ABS(pressure - 100)\n),\nt500 AS (\n  SELECT DISTINCT ON (profile_id)\n         profile_id, temperature AS temperature_obs\n  FROM obs\n  WHERE pressure BETWEEN 400 AND 600 AND temperature IS NOT NULL\n  ORDER BY profile_id, ABS(pressure - 500)\n)\nSELECT ps.observed_at, ps.cycle_number, '100m' AS depth_level, t100.temperature_obs AS temperature\nFROM profile_summary ps\nJOIN t100 ON t100.profile_id = ps.profile_id\nUNION ALL\nSELECT ps.observed_at, ps.cycle_number, '500m' AS depth_level, t500.temperature_obs AS temperature\nFROM profile_summary ps\nJOIN t500 ON t500.profile_id = ps.profile_id\nORDER BY observed_at, depth_level",
+   "columns": [
+    "observed_at",
+    "cycle_number",
+    "depth_level",
+    "temperature"
+   ],
+   "row_count": 50,
+   "chart_type": "line",
+   "answer": "Across 25 profiles from March to November 2002:\n\n* **100 m** water is consistently warm, ranging from about **19.2\u00b0C to 20.9\u00b0C**, typically around 20.0-20.5\u00b0C.\n* **500 m** water is consistently cooler, ranging from about **11.8\u00b0C to 12.4\u00b0C**, typically around 12.0\u00b0C.\n\nIn every profile, 100 m is about 8\u00b0C warmer than 500 m, showing a stable warm upper layer over cooler deeper water with no crossover."
+  },
+  {
+   "id": "p8_inversion",
+   "project": 8,
+   "question": "Are there any temperature inversions in this float's profiles?",
+   "passed": true,
+   "fails": [],
+   "secs": 39.8,
+   "llm_calls": 3,
+   "input_tokens": 35568,
+   "output_tokens": 2727,
+   "intent": "SQL",
+   "sql": "SELECT profile_id, cycle_number, pressure, temperature\nFROM obs\nWHERE profile_id IN (32, 29, 27, 47, 33)\n  AND temperature IS NOT NULL AND pressure IS NOT NULL\nORDER BY profile_id, pressure\nLIMIT 2000",
+   "columns": [
+    "profile_id",
+    "cycle_number",
+    "pressure",
+    "temperature"
+   ],
+   "row_count": 305,
+   "chart_type": "line",
+   "answer": "Yes \u2014 there are small temperature inversions where temperature increases with depth, instead of the normal decrease:\n\n* **Cycle 3 (profile_id 27):** Temperature decreases steadily from about 20.88\u00b0C at 3.8 dbar near the surface to about 3.88\u00b0C at 1996.5 dbar near the bottom, but with one deep inversion:\n  - From ~6.66\u00b0C at 1146.6 dbar to ~6.78\u00b0C at 1196.2 dbar \u2014 an increase of about 0.12\u00b0C.\n\n* **Cycle 5 (profile_id 29, upper 900 dbar shown):** Temperature decreases overall from about 21.52\u00b0C at 4.4 dbar to about 7.42\u00b0C at 896.4 dbar, but with shallow-layer inversions:\n  - From ~21.25\u00b0C at 46.3"
+  },
+  {
+   "id": "p8_aaiw",
+   "project": 8,
+   "question": "Is there Antarctic Intermediate Water in this float's data, and at what depth?",
+   "passed": true,
+   "fails": [],
+   "secs": 59.1,
+   "llm_calls": 3,
+   "input_tokens": 47026,
+   "output_tokens": 3762,
+   "intent": "SQL",
+   "sql": "WITH imin AS (SELECT DISTINCT ON (profile_id) profile_id, cycle_number, observed_at, pressure AS smin_pressure, salinity AS min_salinity, temperature AS temp_at_smin FROM obs WHERE pressure BETWEEN 600 AND 1200 AND salinity IS NOT NULL ORDER BY profile_id, salinity ASC) SELECT AVG(smin_pressure) AS mean_smin_pressure, MIN(smin_pressure) AS min_p, MAX(smin_pressure) AS max_p, AVG(min_salinity) AS mean_min_salinity, AVG(temp_at_smin) AS mean_temp, COUNT(*) AS n FROM imin",
+   "columns": [
+    "mean_smin_pressure",
+    "min_p",
+    "max_p",
+    "mean_min_salinity",
+    "mean_temp",
+    "n"
+   ],
+   "row_count": 1,
+   "chart_type": null,
+   "answer": "Yes \u2014 this float shows a clear salinity minimum consistent with Antarctic Intermediate Water.\n\n* Found in 25 profiles\n* Mean minimum salinity of **35.16 PSU** at a mean pressure of **~948 dbar**\n* Range of the minimum from ~896 to 1097 dbar\n* Associated temperature of ~**7.39 \u00b0C**\n\nThis deep salinity minimum at around 900-1000 m depth is characteristic of AAIW in this region."
+  },
+  {
+   "id": "p8_density",
+   "project": 8,
+   "question": "Plot potential density against depth",
+   "passed": false,
+   "fails": [
+    "response lacks any of ['not available', 'not stored', \"isn't available\", 'not computed', 'not included', \"doesn't include\", 'does not include', 'no density', 'cannot', \"can't\", 'TEOS']"
+   ],
+   "secs": 44.4,
+   "llm_calls": 3,
+   "input_tokens": 18078,
+   "output_tokens": 3270,
+   "intent": "SQL",
+   "sql": "WITH filtered AS (\n  SELECT pressure, temperature AS t, salinity AS s\n  FROM obs\n  WHERE pressure IS NOT NULL AND temperature IS NOT NULL AND salinity IS NOT NULL\n    AND salinity > 20 AND salinity < 42\n),\nwith_theta AS (\n  SELECT pressure, t, s,\n         t - pressure * (\n           3.5803e-5 + 8.5258e-6 * t - 6.836e-8 * t*t + 6.6228e-10 * t*t*t\n           + (1.8932e-6 - 4.2393e-8 * t) * s\n           + (1.8741e-8 - 6.7795e-10 * t + 8.733e-12 * t*t) * (pressure/2.0)\n           + (-1.1351e-10) * s * (pressure/2.0)\n           + (-2.7759e-12) * (pressure/2.0) * (pressure/2.0)\n         ) AS theta\n  FROM filtered\n),\nwith_sigma AS (\n  SELECT pressure, theta, s,\n    (999.842594 + 6.793952e-2*theta - 9.095290e-3*theta*theta + 1.001685e-4*theta*theta*theta - 1.120083e-6*POWER(theta,4) + 6.536332e-9*POWER(theta,5))\n    + (8.24493e-1 - 4.0899e-3*theta + 7.6438e-5*theta*theta - 8.2467e-7*theta*theta*theta + 5.3875e-9*theta*theta*theta*theta) * s\n    + (-5.72466e-3 + 1.0227e-4*theta - 1.6546e-6*theta*theta) * s * SQRT(s)\n    + 4.8314e-4 * s * s\n    - 1000.0 AS sigma0\n  FROM with_theta\n)\nSELECT FLOOR(pressure / 25.0) * 25 AS pressure_bin,\n       AVG(sigma0) AS potential_density,\n       COUNT(*) AS n\nFROM with_sigma\nWHERE sigma0 BETWEEN 20 AND 30\nGROUP BY pressure_bin\nORDER BY pressure_bin",
+   "columns": [
+    "pressure_bin",
+    "potential_density",
+    "n"
+   ],
+   "row_count": 54,
+   "chart_type": "line",
+   "answer": "Plot of potential density vs. depth shows a stable, steadily increasing profile with depth.\n\nSurface values near 0 dbar are around 25.52 kg/m\u00b3, increasing rapidly through the upper 200 dbar to about 26.63 kg/m\u00b3, indicating a strong pycnocline.\n\nBelow that, density continues to increase more gradually with pressure, reaching about 27.13 kg/m\u00b3 at 500 dbar, about 27.55 kg/m\u00b3 at 975 dbar, and about 27.86 kg/m\u00b3 near 1975 dbar in deep water.\n\nThe curve is smooth and monotonic, typical of stable stratification with no inversions."
+  },
+  {
+   "id": "p8_region",
+   "project": 8,
+   "question": "Which ocean region is this float in?",
+   "passed": true,
+   "fails": [],
+   "secs": 21.4,
+   "llm_calls": 3,
+   "input_tokens": 19184,
+   "output_tokens": 1172,
+   "intent": "SQL",
+   "sql": "SELECT profile_id, cycle_number, observed_at, latitude, longitude, surface_temperature, surface_salinity FROM profile_summary WHERE latitude IS NOT NULL AND longitude IS NOT NULL ORDER BY observed_at LIMIT 500",
+   "columns": [
+    "profile_id",
+    "cycle_number",
+    "observed_at",
+    "latitude",
+    "longitude",
+    "surface_temperature",
+    "surface_salinity"
+   ],
+   "row_count": 25,
+   "chart_type": "map",
+   "answer": "This float is in the **eastern subtropical North Atlantic Ocean, off the northwest coast of Africa.**\n\nIt drifted in a small area between about **23.1\u00b0N to 25.8\u00b0N and 20.9\u00b0W to 22.1\u00b0W** from March to November 2002, covering cycles 1 to 25.\n\nSurface conditions show a clear seasonal warming:\n\n* **Temperature:** warmed from around 20.8\u00b0C in March to around 24.2-25.2\u00b0C by October, peaking in early October at 25.2\u00b0C.\n* **Salinity:** remained high and stable throughout, around 36.7 to 37.2 PSU, typical for this evaporative subtropical region.\n\nThe location, warm temperatures, and high salinities are"
+  },
+  {
+   "id": "p8_stratification",
+   "project": 8,
+   "question": "How did upper-ocean stratification change through the year? Plot it.",
+   "passed": true,
+   "fails": [],
+   "secs": 34.8,
+   "llm_calls": 3,
+   "input_tokens": 23838,
+   "output_tokens": 2031,
+   "intent": "SQL",
+   "sql": "WITH surf AS (\n  SELECT DISTINCT ON (profile_id) profile_id, temperature AS surf_temp, salinity AS surf_sal\n  FROM obs\n  WHERE pressure BETWEEN 5 AND 15 AND temperature IS NOT NULL\n  ORDER BY profile_id, ABS(pressure - 10)\n),\ndeep AS (\n  SELECT DISTINCT ON (profile_id) profile_id, temperature AS deep_temp, salinity AS deep_sal, pressure AS deep_press\n  FROM obs\n  WHERE pressure BETWEEN 180 AND 220 AND temperature IS NOT NULL\n  ORDER BY profile_id, ABS(pressure - 200)\n)\nSELECT ps.observed_at AS observed_at, ps.cycle_number AS cycle_number,\n       s.surf_temp - d.deep_temp AS temp_stratification,\n       s.surf_temp AS surf_temp, d.deep_temp AS deep_temp\nFROM surf s\nJOIN deep d ON d.profile_id = s.profile_id\nJOIN profile_summary ps ON ps.profile_id = s.profile_id\nORDER BY ps.observed_at",
+   "columns": [
+    "observed_at",
+    "cycle_number",
+    "temp_stratification",
+    "surf_temp",
+    "deep_temp"
+   ],
+   "row_count": 25,
+   "chart_type": "line",
+   "answer": "Upper-ocean thermal stratification strengthened steadily through 2002.\n\nIn March, the surface-to-deep temperature difference was around 3.0\u00b0C, with surface water near 20.8\u00b0C and deeper water near 17.8\u00b0C.\n\nThrough spring and summer, surface warming drove stratification upward to ~5-6\u00b0C by July-August, while deep temperatures stayed near 16.4-17.4\u00b0C.\n\nStratification peaked in early autumn \u2014 reaching about 7.8\u00b0C on Oct 1st when surface temperature hit its maximum of 25.2\u00b0C \u2014 then weakened slightly to ~6.4\u00b0C by early November as surface waters cooled to 24.2\u00b0C.\n\nA time-series chart of this would s"
+  },
+  {
+   "id": "p4_chl_max",
+   "project": 4,
+   "question": "At what depth is the chlorophyll maximum in each profile?",
+   "passed": true,
+   "fails": [],
+   "secs": 22.6,
+   "llm_calls": 3,
+   "input_tokens": 15561,
+   "output_tokens": 1711,
+   "intent": "SQL",
+   "sql": "WITH ch AS (\n  SELECT profile_id, cycle_number, observed_at, pressure,\n         COALESCE((extras->>'CHLA_ADJUSTED')::float, (extras->>'CHLA')::float) AS chla\n  FROM obs\n  WHERE extras ? 'CHLA'\n)\nSELECT profile_id, cycle_number, observed_at,\n       pressure AS chlorophyll_max_depth, chla AS max_chla\nFROM (\n  SELECT DISTINCT ON (profile_id)\n         profile_id, cycle_number, observed_at, pressure, chla\n  FROM ch\n  WHERE chla IS NOT NULL AND pressure IS NOT NULL\n  ORDER BY profile_id, chla DESC\n) s\nORDER BY observed_at",
+   "columns": [
+    "profile_id",
+    "cycle_number",
+    "observed_at",
+    "chlorophyll_max_depth",
+    "max_chla"
+   ],
+   "row_count": 4,
+   "chart_type": "bar",
+   "answer": "The chlorophyll maximum was found in the upper 15-23 dbar in all 4 profiles:\n\n* **Cycle 6 on 2024-07-31 (profile 2293):** maximum of 0.74 at **19.7 dbar**\n* **Cycle 7 on 2024-08-04 (profile 2288):** maximum of 0.83 at **15.7 dbar**\n* **Cycle 8 on 2024-08-08 (profile 2283):** maximum of 2.89 at **22.9 dbar** \u2014 the strongest peak of the period\n* **Cycle 9 on 2024-08-12 (profile 2278):** maximum of 0.83 at **16.4 dbar**"
+  },
+  {
+   "id": "p13_oxygen_min",
+   "project": 13,
+   "question": "At what depth is dissolved oxygen lowest in each profile?",
+   "passed": true,
+   "fails": [],
+   "secs": 25.4,
+   "llm_calls": 3,
+   "input_tokens": 15489,
+   "output_tokens": 1821,
+   "intent": "SQL",
+   "sql": "WITH ox AS (\n  SELECT profile_id, cycle_number, observed_at, pressure,\n         COALESCE((extras->>'DOXY_ADJUSTED')::float, (extras->>'DOXY')::float) AS doxy\n  FROM obs\n  WHERE extras ? 'DOXY'\n)\nSELECT profile_id, cycle_number, observed_at, oxygen_min_depth, min_doxy\nFROM (\n  SELECT DISTINCT ON (profile_id)\n         profile_id, cycle_number, observed_at, pressure AS oxygen_min_depth, doxy AS min_doxy\n  FROM ox\n  WHERE doxy IS NOT NULL AND pressure IS NOT NULL\n  ORDER BY profile_id, doxy ASC\n) s\nORDER BY observed_at\nLIMIT 500",
+   "columns": [
+    "profile_id",
+    "cycle_number",
+    "observed_at",
+    "oxygen_min_depth",
+    "min_doxy"
+   ],
+   "row_count": 4,
+   "chart_type": "bar",
+   "answer": "Lowest dissolved oxygen by profile:\n\n* **Cycle 1 on 2006-10-22** - minimum oxygen of 173.7 at **1649.9 dbar**\n* **Cycle 2 on 2006-11-01** - minimum oxygen of 152.5 at **2000.0 dbar** \u2014 the deepest minimum and the lowest oxygen value of the 4 profiles\n* **Cycle 3 on 2006-11-11** - minimum oxygen of 174.4 at **1650.4 dbar**\n* **Cycle 4 on 2006-11-21** - minimum oxygen of 175.3 at **1600.1 dbar**\n\nIn general, the oxygen minimum occurs deep, between about 1600 and 2000 dbar."
+  },
+  {
+   "id": "p13_oxygen_profile",
+   "project": 13,
+   "question": "Plot the average oxygen profile binned every 100 dbar",
+   "passed": true,
+   "fails": [],
+   "secs": 20.8,
+   "llm_calls": 3,
+   "input_tokens": 16223,
+   "output_tokens": 1193,
+   "intent": "SQL",
+   "sql": "SELECT FLOOR(pressure / 100) * 100 AS pressure, AVG(COALESCE((extras->>'DOXY_ADJUSTED')::float, (extras->>'DOXY')::float)) AS doxy, COUNT(*) AS n FROM obs WHERE extras ? 'DOXY' AND pressure IS NOT NULL GROUP BY FLOOR(pressure / 100) * 100 ORDER BY pressure",
+   "columns": [
+    "pressure",
+    "doxy",
+    "n"
+   ],
+   "row_count": 21,
+   "chart_type": "line",
+   "answer": "Here is the average oxygen profile binned every 100 dbar:\n\nThe chart shows mean dissolved oxygen vs. pressure from the surface to 2000 dbar.\n\nSurface waters are well-oxygenated at about 258 \u00b5mol/kg, declining gradually through the upper 300 dbar to about 244 \u00b5mol/kg.\n\nOxygen then decreases more steeply between 300 and 700 dbar, from ~244 down to ~204 \u00b5mol/kg.\n\nBetween 800 and 1000 dbar values level off around 206-210 \u00b5mol/kg, before declining again to a broad minimum of about 174-175 \u00b5mol/kg around 1500-1700 dbar.\n\nBelow that there is a slight increase to about 180 \u00b5mol/kg at 1900 dbar. The 20"
+  },
+  {
+   "id": "p13_oxygen_count",
+   "project": 13,
+   "question": "How many profiles have oxygen data?",
+   "passed": true,
+   "fails": [],
+   "secs": 11.8,
+   "llm_calls": 3,
+   "input_tokens": 9691,
+   "output_tokens": 584,
+   "intent": "SQL",
+   "sql": "SELECT COUNT(DISTINCT profile_id) AS profiles_with_oxygen FROM obs WHERE extras ? 'DOXY'",
+   "columns": [
+    "profiles_with_oxygen"
+   ],
+   "row_count": 1,
+   "chart_type": null,
+   "answer": "There are 4 profiles that have oxygen data."
+  },
+  {
+   "id": "p13_recent_profiles",
+   "project": 13,
+   "question": "Plot the temperature profiles of the 3 most recent profiles",
+   "passed": true,
+   "fails": [],
+   "secs": 20.7,
+   "llm_calls": 3,
+   "input_tokens": 18639,
+   "output_tokens": 1182,
+   "intent": "SQL",
+   "sql": "WITH recent AS (\n  SELECT profile_id\n  FROM profile_summary\n  ORDER BY observed_at DESC\n  LIMIT 3\n)\nSELECT o.profile_id,\n       FLOOR(o.pressure / 25) * 25 AS pressure,\n       AVG(o.temperature) AS temperature\nFROM obs o\nJOIN recent r ON r.profile_id = o.profile_id\nWHERE o.temperature IS NOT NULL AND o.pressure IS NOT NULL\nGROUP BY o.profile_id, FLOOR(o.pressure / 25) * 25\nORDER BY o.profile_id, pressure",
+   "columns": [
+    "profile_id",
+    "pressure",
+    "temperature"
+   ],
+   "row_count": 168,
+   "chart_type": "line",
+   "answer": "Here are the temperature profiles for the 3 most recent profiles:\n\nThe data is suitable for a temperature vs. pressure chart, showing how temperature in \u00b0C changes with depth in dbar for each profile:\n\n* **Profile 2260 - deep full profile to 2000 dbar:** Starts warm at the surface around 10.14 \u00b0C, cools steadily through the upper 500 dbar to about 4.89 \u00b0C, then cools more gradually to about 3.46 \u00b0C at 2000 dbar. Classic decreasing profile with depth.\n\n* **Profile 2261 - shallow profile to 125 dbar:** Starts warmest at the surface around 11.99 \u00b0C, drops sharply to about 4.14 \u00b0C at 25 dbar and 3"
+  },
+  {
+   "id": "p13_correlation",
+   "project": 13,
+   "question": "What is the correlation between temperature and salinity?",
+   "passed": false,
+   "fails": [
+    "value_range: no column like ['corr'] in ['salinity', 'temperature']"
+   ],
+   "secs": 31.4,
+   "llm_calls": 3,
+   "input_tokens": 22081,
+   "output_tokens": 2128,
+   "intent": "SQL",
+   "sql": "SELECT salinity, temperature FROM obs WHERE temperature IS NOT NULL AND salinity IS NOT NULL ORDER BY RANDOM() LIMIT 1000",
+   "columns": [
+    "salinity",
+    "temperature"
+   ],
+   "row_count": 1000,
+   "chart_type": "scatter",
+   "answer": "Based on the 100 paired measurements:\n\n**Overall pattern:** Temperature and salinity show a moderate positive correlation \u2014 warmer waters tend to be saltier, while colder waters tend to be fresher.\n\n* **Temperature** ranges from about **-1.45\u00b0C to 30.0\u00b0C**, with most values between **1\u00b0C and 15\u00b0C**.\n* **Salinity** clusters tightly between **34 and 36 PSU** for the majority of samples, typical of open-ocean water.\n\nHigher temperatures around **13\u00b0C to 25\u00b0C** are generally associated with salinities above **35.5 PSU**, up to ~38.8 PSU, while temperatures below ~5\u00b0C are generally associated with "
+  }
+ ]
+}

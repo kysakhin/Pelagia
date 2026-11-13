@@ -7,8 +7,10 @@ import {
   loadConversationMessages,
   type PersistedMessage,
 } from "@/lib/actions/chat";
-import type { ChartPayload } from "@/types";
+import type { AnswerMetadata, ChartPayload } from "@/types";
 import ChartRenderer from "@/components/charts/ChartRenderer";
+import Markdown from "@/components/chat/Markdown";
+import AnswerProvenance from "@/components/chat/AnswerProvenance";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -21,6 +23,7 @@ interface ChatViewMessage {
   query?: string;
   error?: boolean;
   chartPayload?: ChartPayload | null;
+  meta?: AnswerMetadata | null;
 }
 
 interface ChatViewProps {
@@ -46,6 +49,7 @@ function persistedToViewMessage(msg: PersistedMessage): ChatViewMessage {
     data: msg.sql_data,
     query: msg.sql_query,
     chartPayload: msg.chart_payload,
+    meta: msg.metadata,
   };
 }
 
@@ -125,8 +129,12 @@ function AssistantMessage({ message }: { message: ChatViewMessage }) {
         }`}
       >
         {/* Prose content */}
-        <div className="font-serif text-[15px] leading-relaxed text-[#3D4A58] whitespace-pre-wrap">
-          {message.content}
+        <div className="font-serif text-[15px] leading-relaxed text-[#3D4A58]">
+          {message.error ? (
+            <span className="whitespace-pre-wrap">{message.content}</span>
+          ) : (
+            <Markdown>{message.content}</Markdown>
+          )}
         </div>
 
         {/* Chart rendering — inline in the chat bubble */}
@@ -135,6 +143,9 @@ function AssistantMessage({ message }: { message: ChatViewMessage }) {
             <ChartRenderer payload={message.chartPayload} />
           </div>
         )}
+
+        {/* What the answer was based on (ontology concepts, methods, QC) */}
+        {!message.error && <AnswerProvenance meta={message.meta} />}
 
         {/* SQL query disclosure */}
         {message.intent === "SQL" && message.query && (
@@ -229,6 +240,11 @@ export default function ChatView({
           query: result.query,
           error: result.intent === "ERROR",
           chartPayload: result.chart_payload,
+          meta: {
+            concepts: result.concepts,
+            methods: result.methods,
+            quality_flags: result.quality_flags,
+          },
         };
 
         setMessages((prev) => [...prev, assistantMsg]);

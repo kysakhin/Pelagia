@@ -437,6 +437,202 @@ export function buildBoxplot(_ctx: BuildContext): Record<string, unknown> {
   throw new Error("Boxplot charts are not yet implemented (planned for Phase 5).");
 }
 
+// ── Map (float track) ───────────────────────────────────────────────────────
+// x = longitude, y = latitude. Optional `color` drives a continuous colour
+// scale (numeric or time values, e.g. observed_at or surface_temperature);
+// optional `series` splits points into separately-connected tracks (e.g.
+// file_id for multiple floats). Rows are connected in the order received, so
+// the SQL should ORDER BY observed_at. Requires the "world" map to be
+// registered with echarts (see worldMap.ts) before rendering.
+
+export const WORLD_MAP_NAME = "world";
+
+const MAP_TRACK_COLORS = ["#4A87BE", "#C0504D", "#4E9A6B", "#8064A2", "#D08A3A", "#3A9BA8"];
+
+// An Argo float drifts tens of km between ~10-day cycles. A jump larger than
+// this between consecutive rows means a different float (files can bundle
+// many floats, and platform_number is often missing) or a long data gap, so
+// the track is broken there instead of drawing a misleading line.
+export const MAP_TRACK_MAX_JUMP_KM = 600;
+
+function haversineKm(a: [number, number], b: [number, number]): number {
+  const R = 6371;
+  const rad = Math.PI / 180;
+  const dLat = (b[1] - a[1]) * rad;
+  const dLon = (b[0] - a[0]) * rad;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(a[1] * rad) * Math.cos(b[1] * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/** Split an ordered list of positions into plausible single-float segments. */
+export function splitTrack(coords: [number, number][]): [number, number][][] {
+  const segments: [number, number][][] = [];
+  let current: [number, number][] = [];
+  for (const c of coords) {
+    const prev = current[current.length - 1];
+    // Also break when crossing the antimeridian so lines don't span the map.
+    if (prev && (haversineKm(prev, c) > MAP_TRACK_MAX_JUMP_KM || Math.abs(c[0] - prev[0]) > 180)) {
+      if (current.length > 1) segments.push(current);
+      current = [];
+    }
+    current.push(c);
+  }
+  if (current.length > 1) segments.push(current);
+  return segments;
+}
+
+function mapBounds(points: [number, number][]): [[number, number], [number, number]] {
+  const lons = points.map((p) => p[0]);
+  const lats = points.map((p) => p[1]);
+  let minLon = Math.min(...lons);
+  let maxLon = Math.max(...lons);
+  let minLat = Math.min(...lats);
+  let maxLat = Math.max(...lats);
+  // Pad so single points / short tracks still show surrounding coastline.
+  const padLon = Math.max((maxLon - minLon) * 0.35, 8);
+  const padLat = Math.max((maxLat - minLat) * 0.35, 6);
+  minLon = Math.max(minLon - padLon, -180);
+  maxLon = Math.min(maxLon + padLon, 180);
+  minLat = Math.max(minLat - padLat, -85);
+  maxLat = Math.min(maxLat + padLat, 85);
+  // ECharts boundingCoords: [[left, top], [right, bottom]]
+  return [
+    [minLon, maxLat],
+    [maxLon, minLat],
+  ];
+}
+
+export function buildMap(ctx: BuildContext): Record<string, unknown> {
+  const lon = pick(ctx, "x");
+  const lat = pick(ctx, "y");
+  if (!lon || !lat) {
+    throw new Error("Map requires encoding.x (longitude) and encoding.y (latitude)");
+  }
+  const color = pick(ctx, "color");
+  const series = pick(ctx, "series");
+  const showTrack = ctx.spec.options?.show_track ?? true;
+
+  // Colour scale: numeric values directly, timestamps as epoch ms.
+  const colorKind =
+    color && getXAxisKind(ctx.data, color.key) === "time" ? "time" : "value";
+  const colorValue = (row: Record<string, unknown>): number | null => {
+    if (!color) return null;
+    return colorKind === "time" ? toTime(row[color.key]) : toNumber(row[color.key]);
+  };
+
+  type MapPoint = { value: (number | null)[]; row: Record<string, unknown> };
+  const groups = new Map<string, MapPoint[]>();
+  const allCoords: [number, number][] = [];
+
+  for (const row of ctx.data) {
+    const lo = toNumber(row[lon.key]);
+    const la = toNumber(row[lat.key]);
+    if (lo === null || la === null || Math.abs(la) > 90 || Math.abs(lo) > 180) continue;
+    const key = series ? toCategory(row[series.key]) ?? "—" : "track";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push({ value: [lo, la, colorValue(row)], row });
+    allCoords.push([lo, la]);
+  }
+
+  if (allCoords.length === 0) {
+    throw new Error("Map has no rows with valid latitude/longitude");
+  }
+
+  const colorValues = Array.from(groups.values())
+    .flat()
+    .map((p) => p.value[2])
+    .filter((v): v is number => v !== null);
+  const hasColorScale = colorValues.length > 0;
+
+  const echartsSeries: Record<string, unknown>[] = [];
+  let i = 0;
+  for (const [name, points] of groups) {
+    const trackColor = MAP_TRACK_COLORS[i % MAP_TRACK_COLORS.length];
+    i += 1;
+    const segments = showTrack
+      ? splitTrack(points.map((p) => [p.value[0] as number, p.value[1] as number]))
+      : [];
+    if (segments.length > 0) {
+      echartsSeries.push({
+        type: "lines",
+        coordinateSystem: "geo",
+        polyline: true,
+        silent: true,
+        data: segments.map((coords) => ({ coords })),
+        lineStyle: { color: trackColor, width: 1.5, opacity: 0.6 },
+        z: 2,
+      });
+    }
+    echartsSeries.push({
+      name: series ? name : lat.label,
+      type: "scatter",
+      coordinateSystem: "geo",
+      symbolSize: 7,
+      data: points.map((p) => ({ value: p.value, row: p.row })),
+      itemStyle: hasColorScale
+        ? { borderColor: "#fff", borderWidth: 0.5 }
+        : { color: trackColor, borderColor: "#fff", borderWidth: 0.5 },
+      z: 3,
+    });
+  }
+
+  const formatColor = (v: number) =>
+    colorKind === "time" ? new Date(v).toISOString().slice(0, 10) : v.toFixed(2);
+
+  return {
+    ...COMMON_STYLE,
+    title: baseTitle(ctx.spec),
+    tooltip: {
+      trigger: "item",
+      formatter: (params: { data?: { row?: Record<string, unknown> } }) => {
+        const row = params.data?.row;
+        if (!row) return "";
+        return Object.entries(row)
+          .map(([k, v]) => `${k.replace(/_/g, " ")}: <b>${v === null || v === undefined ? "—" : String(v)}</b>`)
+          .join("<br/>");
+      },
+    },
+    // With a colour scale the points are coloured by value, so a per-series
+    // legend would show colours that match nothing on the map.
+    legend:
+      series && groups.size > 1 && !hasColorScale
+        ? { bottom: 0, type: "scroll", data: Array.from(groups.keys()) }
+        : undefined,
+    visualMap: hasColorScale
+      ? {
+          type: "continuous",
+          min: Math.min(...colorValues),
+          max: Math.max(...colorValues),
+          dimension: 2,
+          seriesIndex: echartsSeries
+            .map((s, idx) => (s.type === "scatter" ? idx : -1))
+            .filter((idx) => idx >= 0),
+          text: [color!.label, ""],
+          orient: "vertical",
+          right: 8,
+          top: "middle",
+          itemHeight: 120,
+          calculable: false,
+          formatter: formatColor,
+          inRange: { color: ["#2C7BB6", "#ABD9E9", "#FFFFBF", "#FDAE61", "#D7191C"] },
+          textStyle: { color: "#3D4A58", fontSize: 11 },
+        }
+      : undefined,
+    geo: {
+      map: WORLD_MAP_NAME,
+      roam: true,
+      boundingCoords: mapBounds(allCoords),
+      itemStyle: { areaColor: "#E6E9EC", borderColor: "#C8CDD4", borderWidth: 0.5 },
+      emphasis: { disabled: true },
+      silent: true,
+    },
+    backgroundColor: "#F4F8FB",
+    series: echartsSeries,
+  };
+}
+
 // ── Dispatcher ──────────────────────────────────────────────────────────────
 
 export function buildEChartsOption(
@@ -460,6 +656,8 @@ export function buildEChartsOption(
       return buildArea(ctx);
     case "boxplot":
       return buildBoxplot(ctx);
+    case "map":
+      return buildMap(ctx);
     default:
       throw new Error(
         `Unknown chart_type: ${(payload.spec as { chart_type: string }).chart_type}`

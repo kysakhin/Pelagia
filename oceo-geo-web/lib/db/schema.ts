@@ -152,6 +152,8 @@ export const messages = pgTable(
     sqlQuery: text("sql_query"),
     sqlData: jsonb("sql_data"),
     chartSpec: jsonb("chart_spec"),
+    // Ontology provenance for assistant answers: { concepts, methods, quality_flags }
+    metadata: jsonb("metadata"),
     createdAt: timestamp("created_at").defaultNow(),
   },
   (t) => [index("idx_messages_conversation").on(t.conversationId)]

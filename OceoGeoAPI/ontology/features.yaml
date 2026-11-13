@@ -1,0 +1,75 @@
+# Features / phenomena: things in the water column that users ask about by
+# name. Each links to the variables it is a feature of and, where one exists,
+# the derived quantity that measures it.
+
+concepts:
+  - id: thermocline
+    kind: feature
+    label: Thermocline
+    aliases: [thermocline]
+    feature_of: [temperature]
+    measured_by: thermocline_depth
+    definition: The layer where temperature drops rapidly with depth, separating warm surface water from cold deep water.
+
+  - id: mixed_layer
+    kind: feature
+    label: Mixed layer
+    aliases: [mixed layer]
+    feature_of: [temperature]
+    measured_by: mixed_layer_depth
+    definition: The well-mixed surface layer of nearly uniform temperature and salinity.
+
+  - id: temperature_inversion
+    kind: feature
+    label: Temperature inversion
+    aliases: [temperature inversion, inversion, inversions, warmer below, warming with depth]
+    feature_of: [temperature, salinity]
+    definition: >-
+      Temperature increasing with depth over some interval. Stable only when
+      the deeper water is saltier; common below the mixed layer near fronts,
+      sea ice and where warm salty water intrudes beneath fresher water.
+    detection: >-
+      Between consecutive levels below 20 dbar, temperature increases by more
+      than 0.1 °C with depth (small steps are sensor noise).
+    parameters:
+      min_increase_degC: {default: 0.1}
+      min_dbar: {default: 20}
+    references: ["Talley et al. (2011) Descriptive Physical Oceanography"]
+    output: [profile_id, observed_at, cycle_number, pressure, temperature, temperature_increase]
+    sql_template: |
+      WITH lvl AS (
+        SELECT profile_id, observed_at, cycle_number, pressure, temperature,
+               temperature - LAG(temperature) OVER w AS temperature_increase
+        FROM obs
+        WHERE temperature IS NOT NULL AND pressure > 20
+        WINDOW w AS (PARTITION BY profile_id ORDER BY pressure)
+      )
+      SELECT profile_id, observed_at, cycle_number, pressure, temperature, temperature_increase
+      FROM lvl
+      WHERE temperature_increase > 0.1
+      ORDER BY observed_at, pressure
+
+  - id: oxygen_minimum_zone
+    kind: feature
+    label: Oxygen minimum zone
+    aliases: [oxygen minimum zone, omz, OMZ, hypoxic, hypoxia, suboxic, low oxygen, dead zone]
+    feature_of: [doxy]
+    measured_by: oxygen_minimum
+    definition: >-
+      A subsurface layer of strongly depleted oxygen, typically 200–1000 m in
+      the eastern tropical Pacific, Arabian Sea and Bay of Bengal.
+    detection: >-
+      Thresholds vary by community: hypoxic < 60 µmol/kg, suboxic < 20 µmol/kg.
+      Report which threshold is used.
+    references: ["Paulmier & Ruiz-Pino (2009) Prog. Oceanogr. 80, 113–128"]
+
+  - id: deep_chlorophyll_maximum
+    kind: feature
+    label: Deep chlorophyll maximum
+    aliases: [deep chlorophyll maximum, dcm, DCM, subsurface chlorophyll maximum, scm]
+    feature_of: [chla]
+    measured_by: chlorophyll_maximum_depth
+    definition: >-
+      A subsurface peak in chlorophyll, typical of stratified, nutrient-poor
+      waters where phytoplankton grow near the nutricline.
+    references: ["Cullen (2015) Annu. Rev. Mar. Sci. 7, 207–239"]

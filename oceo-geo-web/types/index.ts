@@ -38,7 +38,8 @@ export type ChartType =
   | "heatmap"
   | "pie"
   | "area"
-  | "boxplot";
+  | "boxplot"
+  | "map";      // x = longitude, y = latitude
 
 export interface ChartEncoding {
   x?: string;       // must match a column id from the SQL result metadata
@@ -65,6 +66,7 @@ export interface ChartSpec {
     show_legend?: boolean;
     show_regression?: boolean;
     bin_count?: number;     // histogram only
+    show_track?: boolean;   // map only: connect points in row order (default true)
   };
 }
 
@@ -84,4 +86,18 @@ export interface ChartPayload {
 export interface ColumnMeta {
   id: string;
   type: "number" | "integer" | "string" | "boolean" | "datetime" | "object";
+}
+
+// ── Ontology provenance (see OceoGeoAPI/core/concept_linker.py) ────────────
+export interface ConceptRef {
+  id: string;
+  label: string;
+  kind: "variable" | "coordinate" | "derived" | "feature" | "water_mass" | "region";
+}
+
+/** What the answer was based on: matched concepts, methods, data warnings. */
+export interface AnswerMetadata {
+  concepts?: ConceptRef[];
+  methods?: string[];
+  quality_flags?: string[];
 }

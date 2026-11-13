@@ -2,21 +2,33 @@ import json
 import logging
 
 from agno.agent import Agent
+from agno.models.base import Model
+from agno.models.openai import OpenAIChat, OpenAIResponses
 from agno.models.openrouter import OpenRouter
 
-from config import OPENROUTER_API_KEY, OPENROUTER_MODEL
+from config import (
+    LLM_MODEL,
+    LLM_PROVIDER,
+    LLM_SQL_REASONING_EFFORT,
+    OPENCODE_API_KEY,
+    OPENCODE_BASE_URL,
+    OPENROUTER_API_KEY,
+)
 from core.chart_payload import (
     GLOBAL_RESULT_STORE,
     ChartPayloadService,
     ChartSpecError,
     ResultStore,
 )
-from core.glossary import GLOSSARY
+from core.ontology import get_ontology
+from core.concept_linker import glossary_text
+from core.result_checks import result_quality_flags
 from core.tools import (
     create_sql_tool,
     create_visualization_spec_tool,
     extract_tool_args,
     extract_tool_result,
+    tool_calls,
 )
 from services.NeondbService import NeonDBService
 
@@ -31,13 +43,77 @@ _MESSAGE_PREVIEW_LIMIT = 100
 # Reasoning models (e.g. openai/gpt-oss-*) spend completion tokens thinking
 # before emitting content; undersized budgets truncate mid-reasoning and yield
 # empty content. Every agent therefore gets generous headroom.
-_INTENT_MAX_TOKENS = 300
-_SQL_AGENT_MAX_TOKENS = 1500
-_SUMMARY_MAX_TOKENS = 1000
+_INTENT_MAX_TOKENS = 800
+_SQL_AGENT_MAX_TOKENS = 4000
+_SUMMARY_MAX_TOKENS = 1500
+
+# Reasoning effort per step, for providers/models that support it (OpenAI
+# Responses API models such as muse-spark on OpenCode). Classification and
+# summaries need little thought; SQL writing benefits from more. Lower effort
+# is markedly faster. Override the SQL step with LLM_SQL_REASONING_EFFORT.
+_INTENT_REASONING = "minimal"
+_SQL_REASONING = LLM_SQL_REASONING_EFFORT
+_SUMMARY_REASONING = "minimal"
+
+# Self-correction: the agent may retry failed queries inside one run (bounded
+# by tool_call_limit), and we re-prompt it with the error up to this many
+# extra times if its run still ends on a failed query.
+_SQL_CORRECTION_ATTEMPTS = 2
+_SQL_TOOL_CALL_LIMIT = 6
 
 
 class SQLAgentNoQueryError(RuntimeError):
     """Raised when the SQL agent does not produce an executable query."""
+
+
+# ── Conversation history (follow-up questions) ──────────────────────────────
+# Only the most recent turns are sent; long assistant replies and SQL are
+# truncated so history never dominates the prompt.
+_HISTORY_MAX_TURNS = 6
+_HISTORY_CONTENT_CHARS = 600
+_HISTORY_SQL_CHARS = 1500
+
+
+def format_history(history: list[dict] | None) -> str:
+    """Render recent conversation turns as a plain-text block for agent input.
+
+    Each turn is a dict with ``role`` ("user" | "assistant"), ``content`` and
+    optionally ``intent`` / ``sql_query``. Returns "" when there is no history.
+    """
+    if not history:
+        return ""
+    lines: list[str] = []
+    for turn in history[-_HISTORY_MAX_TURNS:]:
+        role = turn.get("role")
+        content = (turn.get("content") or "").strip()
+        if len(content) > _HISTORY_CONTENT_CHARS:
+            content = content[:_HISTORY_CONTENT_CHARS] + " …"
+        if role == "user":
+            lines.append(f"User: {content}")
+        elif role == "assistant":
+            lines.append(f"Assistant: {content}")
+            sql = (turn.get("sql_query") or "").strip()
+            if sql:
+                if len(sql) > _HISTORY_SQL_CHARS:
+                    sql = sql[:_HISTORY_SQL_CHARS] + " …"
+                lines.append(f"[SQL the assistant ran for that answer]\n{sql}")
+    return "\n".join(lines)
+
+
+def with_history(message: str, history_text: str) -> str:
+    """Prefix the current message with recent conversation context.
+
+    Agents are stateless between requests, so follow-ups like "now do that
+    for salinity" only make sense if the previous turns travel with them.
+    """
+    if not history_text:
+        return message
+    return (
+        "Recent conversation (for context — resolve references like \"that\", "
+        "\"same\", \"those profiles\", \"now for salinity\" against it):\n"
+        f"{history_text}\n\n"
+        f"Current question: {message}"
+    )
 
 
 def _infer_chart_spec(message: str, result_id: str | None, columns: list[dict]) -> dict | None:
@@ -54,6 +130,21 @@ def _infer_chart_spec(message: str, result_id: str | None, columns: list[dict]) 
             if candidate in column_set:
                 return candidate
         return None
+
+    map_words = ("map", "trajectory", "track", "where has", "where did", "where was", "positions", "locations")
+    if any(w in msg for w in map_words) and {"latitude", "longitude"}.issubset(column_set):
+        spec = {
+            "result_id": result_id,
+            "chart_type": "map",
+            "title": "Float positions",
+            "encoding": {"x": "longitude", "y": "latitude"},
+        }
+        color = first_available(("observed_at", "surface_temperature"))
+        if color:
+            spec["encoding"]["color"] = color
+        if "file_id" in column_set:
+            spec["encoding"]["series"] = "file_id"
+        return spec
 
     if "histogram" in msg or "distribution" in msg:
         x = first_available(("salinity", "temperature", "pressure")) or (column_ids[0] if column_ids else None)
@@ -78,7 +169,7 @@ def _infer_chart_spec(message: str, result_id: str | None, columns: list[dict]) 
     if "line" in msg or "separate line" in msg:
         x = first_available(("pressure", "observed_at", "observation_date"))
         y = first_available(("temperature", "avg_temperature", "salinity", "avg_salinity"))
-        series = first_available(("cycle_number", "profile_id", "data_mode"))
+        series = first_available(("profile_id", "cycle_number", "data_mode"))
         if x and y:
             spec = {
                 "result_id": result_id,
@@ -138,7 +229,18 @@ def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
     """
     content = (response.content or "").strip()
 
-    sql_result = extract_tool_result(response, "run_sql_query")
+    # The agent may call run_sql_query several times in one run (self-
+    # correction, or extra exploratory queries). The answer is the result the
+    # agent chose to chart, if any; otherwise the final call.
+    sql_result = extract_tool_result(response, "run_sql_query", last=True)
+    chosen_args = None
+    viz = extract_tool_result(response, "create_visualization_spec", last=True)
+    charted_id = ((viz or {}).get("chart_spec") or {}).get("result_id")
+    if charted_id:
+        for args, res in tool_calls(response, "run_sql_query"):
+            if res and res.get("result_id") == charted_id:
+                sql_result, chosen_args = res, args
+                break
 
     query = ""
     data: list[dict] = []
@@ -146,10 +248,12 @@ def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
     columns: list[dict] = []
     row_count = 0
     sql_error = None
+    retryable = True
 
     if sql_result:
         if "error" in sql_result:
             sql_error = sql_result["error"]
+            retryable = sql_result.get("retryable", True)
         else:
             result_id = sql_result.get("result_id")
             columns = sql_result.get("columns", [])
@@ -182,6 +286,7 @@ def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
                         sql_result = None
                     if sql_result and "error" in sql_result:
                         sql_error = sql_result["error"]
+                        retryable = sql_result.get("retryable", True)
                     elif sql_result:
                         result_id = sql_result.get("result_id")
                         columns = sql_result.get("columns", [])
@@ -194,7 +299,7 @@ def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
 
     # Recover query text from tool_args if we still don't have it.
     if not query:
-        args = extract_tool_args(response, "run_sql_query")
+        args = chosen_args or extract_tool_args(response, "run_sql_query", last=True)
         if args and isinstance(args.get("query"), str):
             query = args["query"]
 
@@ -205,32 +310,84 @@ def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
         "columns": columns,
         "row_count": row_count,
         "sql_error": sql_error,
+        "sql_retryable": retryable,
         "sql_result": sql_result,
         "content": content,
     }
 
 
-def make_openrouter_model(max_tokens: int) -> OpenRouter:
-    return OpenRouter(
-        api_key=OPENROUTER_API_KEY,
-        id=OPENROUTER_MODEL,
-        max_tokens=max_tokens,
-        timeout=30.0,
-        retries=2,
-        delay_between_retries=1,
-        exponential_backoff=True,
+def _correction_message(question: str, failed_query: str, error: str) -> str:
+    """Build the follow-up prompt that asks the agent to fix a failed query.
+
+    The agent has no memory between runs, so the original question, the
+    failed SQL and the database error are all restated.
+    """
+    return (
+        f"{question}\n\n"
+        "Your previous attempt to answer this failed.\n"
+        f"Query:\n{failed_query or '(no query captured)'}\n\n"
+        f"Error:\n{error}\n\n"
+        "Fix the query (check column names against the obs / profile_summary "
+        "views, aliases, GROUP BY, and casts) and call run_sql_query again."
     )
 
 
-def classify_intent(message: str, system_message: str) -> str:
+# OpenCode Zen serves these model families only on the OpenAI Responses API;
+# everything else it serves on chat/completions.
+_OPENCODE_RESPONSES_PREFIXES = ("gpt-", "grok-", "muse-")
+
+_RETRY_KWARGS = dict(retries=2, delay_between_retries=1, exponential_backoff=True)
+_LLM_TIMEOUT_S = 30.0
+
+
+def make_model(max_tokens: int, reasoning_effort: str | None = None) -> Model:
+    """Build the configured LLM (see LLM_PROVIDER / LLM_MODEL in config.py).
+
+    `reasoning_effort` ("minimal" | "low" | "medium" | "high") is applied
+    where the API supports it (OpenCode Responses models); ignored elsewhere.
+    """
+    if LLM_PROVIDER == "opencode":
+        if not OPENCODE_API_KEY:
+            raise RuntimeError("LLM_PROVIDER=opencode but OPENCODE_API_KEY is not set")
+        if LLM_MODEL.startswith(_OPENCODE_RESPONSES_PREFIXES):
+            return OpenAIResponses(
+                id=LLM_MODEL,
+                api_key=OPENCODE_API_KEY,
+                base_url=OPENCODE_BASE_URL,
+                max_output_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
+                timeout=_LLM_TIMEOUT_S,
+                **_RETRY_KWARGS,
+            )
+        return OpenAIChat(
+            id=LLM_MODEL,
+            api_key=OPENCODE_API_KEY,
+            base_url=OPENCODE_BASE_URL,
+            max_tokens=max_tokens,
+            timeout=_LLM_TIMEOUT_S,
+            **_RETRY_KWARGS,
+        )
+
+    if LLM_PROVIDER != "openrouter":
+        raise RuntimeError(f"Unknown LLM_PROVIDER {LLM_PROVIDER!r}")
+    return OpenRouter(
+        api_key=OPENROUTER_API_KEY,
+        id=LLM_MODEL,
+        max_tokens=max_tokens,
+        timeout=_LLM_TIMEOUT_S,
+        **_RETRY_KWARGS,
+    )
+
+
+def classify_intent(message: str, system_message: str, history_text: str = "") -> str:
     """Use a lightweight agent to classify the user message as
     SQL, DOMAIN, CONTEXT, or OFF_TOPIC."""
     agent = Agent(
-        model=make_openrouter_model(_INTENT_MAX_TOKENS),
+        model=make_model(_INTENT_MAX_TOKENS, reasoning_effort=_INTENT_REASONING),
         system_message=system_message,
         markdown=False,
     )
-    response = agent.run(message)
+    response = agent.run(with_history(message, history_text))
     raw = (response.content or "").strip().upper()
     raw = raw.replace("-", "_").replace(" ", "_")
 
@@ -256,6 +413,36 @@ def _format_available_params(params: list[str] | None) -> str:
     return ", ".join(params)
 
 
+# Sentinel: run_sql_agent fetches project parameters itself unless given.
+_FETCH = object()
+
+
+def fetch_available_params(db: NeonDBService, project_id: int) -> list[str] | None:
+    """Project's BGC parameter names, or None if they could not be loaded
+    (None = unknown: JSONB key validation and availability checks are skipped
+    rather than false-rejecting)."""
+    try:
+        return db.get_project_parameters(project_id)
+    except Exception:
+        logger.exception(
+            "Failed to fetch project_parameters for project %s; "
+            "JSONB key validation will be skipped for this request",
+            project_id,
+        )
+        return None
+
+
+_NO_ONTOLOGY_CONTEXT = "(No specific domain concepts matched this question.)"
+
+
+def _inject_ontology_context(system_message: str, ontology_context: str) -> str:
+    """Fill the {ontology_context} placeholder in the SQL prompt."""
+    text = ontology_context.strip() or _NO_ONTOLOGY_CONTEXT
+    if "{ontology_context}" in system_message:
+        return system_message.replace("{ontology_context}", text)
+    return system_message + "\n\n## Domain knowledge for this question\n\n" + text
+
+
 def _inject_available_params(system_message: str, params: list[str] | None) -> str:
     """Replace the {available_params} placeholder in the SQL prompt with the
     project's current extras parameter list."""
@@ -273,6 +460,10 @@ def run_sql_agent(
     *,
     result_store: ResultStore | None = None,
     chart_payload_service: ChartPayloadService | None = None,
+    history_text: str = "",
+    available_params: list[str] | None | object = _FETCH,
+    ontology_context: str = "",
+    method_notes: list[str] | None = None,
 ) -> dict:
     """Generate a SQL query via the agent, execute it through the SQL tool,
     optionally produce a chart_spec, and compose a chart_payload outside the
@@ -291,19 +482,12 @@ def run_sql_agent(
     store = result_store if result_store is not None else GLOBAL_RESULT_STORE
     chart_service = chart_payload_service or ChartPayloadService(store)
 
-    # ── 1. Inject available extras parameters into the system prompt ────────
-    available_params: list[str] | None
-    try:
-        available_params = db.get_project_parameters(project_id)
-    except Exception:
-        logger.exception(
-            "Failed to fetch project_parameters for project %s; "
-            "JSONB key validation will be skipped for this request",
-            project_id,
-        )
-        available_params = None  # None = unknown; skip validation rather than false-reject
-    system_message_injected = _inject_available_params(
-        system_message, available_params
+    # ── 1. Inject available extras parameters + ontology context ────────────
+    if available_params is _FETCH:
+        available_params = fetch_available_params(db, project_id)
+    system_message_injected = _inject_ontology_context(
+        _inject_available_params(system_message, available_params),
+        ontology_context,
     )
 
     # ── 2. Build tools bound to this project / result store ─────────────────
@@ -315,13 +499,17 @@ def run_sql_agent(
     viz_tool = create_visualization_spec_tool()
 
     agent = Agent(
-        model=make_openrouter_model(_SQL_AGENT_MAX_TOKENS),
+        model=make_model(_SQL_AGENT_MAX_TOKENS, reasoning_effort=_SQL_REASONING),
         system_message=system_message_injected,
         tools=[sql_tool, viz_tool],
+        tool_call_limit=_SQL_TOOL_CALL_LIMIT,
         markdown=False,
     )
 
-    last_response = agent.run(message)
+    # The agent sees recent turns (incl. previous SQL) so follow-ups work; the
+    # summary step below still uses the bare question.
+    agent_input = with_history(message, history_text)
+    last_response = agent.run(agent_input)
     outcome = _extract_sql_outcome(last_response, store, sql_tool)
 
     # The model sometimes emits a malformed viz tool call (e.g.
@@ -332,12 +520,30 @@ def run_sql_agent(
             "SQL agent produced no query on first attempt; retrying once with emphasis"
         )
         last_response = agent.run(
-            message
+            agent_input
             + "\n\nIMPORTANT: First call the run_sql_query tool with a single "
             "SELECT query. Do NOT return SQL as plain text and do NOT call "
             "create_visualization_spec before running the query."
         )
         outcome = _extract_sql_outcome(last_response, store, sql_tool)
+
+    # ── 3. Self-correction: feed SQL errors back to the agent ───────────────
+    for attempt in range(1, _SQL_CORRECTION_ATTEMPTS + 1):
+        if not outcome["sql_error"] or not outcome["sql_retryable"]:
+            break
+        logger.info(
+            "SQL attempt failed (%s); asking agent to correct (attempt %d/%d)",
+            outcome["sql_error"], attempt, _SQL_CORRECTION_ATTEMPTS,
+        )
+        last_response = agent.run(
+            _correction_message(agent_input, outcome["query"], outcome["sql_error"])
+        )
+        corrected = _extract_sql_outcome(last_response, store, sql_tool)
+        if corrected["sql_result"] is None and not corrected["query"]:
+            # The agent produced nothing usable this round; keep the last
+            # real error rather than replacing it with an empty outcome.
+            continue
+        outcome = corrected
 
     query = outcome["query"]
     data = outcome["data"]
@@ -372,7 +578,7 @@ def run_sql_agent(
 
     # ── 5. Extract chart_spec from create_visualization_spec tool ───────────
     chart_spec = None
-    viz_result = extract_tool_result(last_response, "create_visualization_spec")
+    viz_result = extract_tool_result(last_response, "create_visualization_spec", last=True)
     if viz_result and viz_result.get("status") == "ok":
         chart_spec = viz_result.get("chart_spec")
     elif viz_result and viz_result.get("status") == "error":
@@ -398,13 +604,24 @@ def run_sql_agent(
             chart_payload = None
             # Keep chart_spec in the response for debugging, but no payload.
 
+    # ── 6b. Physical range checks on the full (display-limited) result ──────
+    quality_flags: list[str] = []
+    if data and result_id:
+        try:
+            stored = store.get(result_id)
+            quality_flags = result_quality_flags(
+                stored["rows"] if stored else data, columns, get_ontology()
+            )
+        except Exception:
+            logger.exception("Result range check failed; continuing without flags")
+
     # ── 7. Generate a natural-language summary of the results ───────────────
     first_word = content.lstrip("( \t\n").split()[0].upper() if content.strip() else ""
     content_is_sql = first_word in ("SELECT", "WITH")
 
     if data:
         summary_agent = Agent(
-            model=make_openrouter_model(_SUMMARY_MAX_TOKENS),
+            model=make_model(_SUMMARY_MAX_TOKENS, reasoning_effort=_SUMMARY_REASONING),
             system_message=(
                 "You are a helpful oceanographic data analyst. "
                 "Summarize the following SQL query results in clear, concise "
@@ -416,11 +633,25 @@ def run_sql_agent(
             ),
             markdown=True,
         )
+        methods_block = ""
+        if quality_flags:
+            methods_block += (
+                "\n\nData quality warnings (mention these briefly):\n- "
+                + "\n- ".join(quality_flags)
+            )
+        if method_notes:
+            methods_block += (
+                "\n\nBackground facts and methods behind this analysis (use them to "
+                "interpret the numbers and mention relevant facts such as the region; "
+                "end with one short 'Method:' line naming the method and reference if "
+                "the answer depends on one):\n- " + "\n- ".join(method_notes)
+            )
         try:
             summary_response = summary_agent.run(
                 f"User question: {message}\n\n"
                 f"Query results (JSON, first {_MESSAGE_PREVIEW_LIMIT} rows):\n"
                 f"{json.dumps(data, default=str)}"
+                f"{methods_block}"
             )
             summary = (summary_response.content or "").strip() or content
         except Exception:
@@ -446,38 +677,32 @@ def run_sql_agent(
         "row_count": row_count,
         "chart_spec": chart_spec,
         "chart_payload": chart_payload,
+        "quality_flags": quality_flags,
     }
 
 
-def run_domain_agent(message: str, system_message: str) -> str:
+def run_domain_agent(message: str, system_message: str, history_text: str = "") -> str:
     """Answer a general oceanographic / geospatial question."""
     agent = Agent(
-        model=make_openrouter_model(1000),
+        model=make_model(1000, reasoning_effort=_SUMMARY_REASONING),
         system_message=system_message,
         markdown=True,
     )
-    response = agent.run(message)
+    response = agent.run(with_history(message, history_text))
     return (response.content or "").strip()
 
 
-def run_context_agent(message: str, context: dict | None, system_message: str) -> str:
-    """Answer a question about a specific variable or chart pattern using the
-    Ground Truth glossary."""
+def run_context_agent(
+    message: str,
+    context: dict | None,
+    system_message: str,
+    history_text: str = "",
+    concept_ids: list[str] | None = None,
+) -> str:
+    """Answer a question about a specific variable or chart pattern, grounded
+    in the ontology's definitions and valid/typical ranges."""
 
-    glossary_str = "GLOSSARY GROUND TRUTH:\n"
-    for var, details in GLOSSARY.items():
-        glossary_str += (
-            f"- {var.upper()} ({details['unit']}): "
-            f"{details['physical_meaning']}\n"
-        )
-        glossary_str += (
-            f"  Typical ranges: "
-            f"{details.get('typical_surface_range', '')} / "
-            f"{details.get('typical_deep_range', '')} / "
-            f"{details.get('typical_open_ocean_range', '')} / "
-            f"{details.get('typical_argo_range', '')}\n"
-        )
-        glossary_str += f"  Anomalies: {details.get('anomaly_note', '')}\n"
+    glossary_str = glossary_text(get_ontology(), concept_ids)
 
     view_state_str = "\nCURRENT VIEW STATE:\n"
     if context:
@@ -488,10 +713,10 @@ def run_context_agent(message: str, context: dict | None, system_message: str) -
     full_system_prompt = system_message + "\n\n" + glossary_str + view_state_str
 
     agent = Agent(
-        model=make_openrouter_model(1000),
+        model=make_model(1000, reasoning_effort=_SUMMARY_REASONING),
         system_message=full_system_prompt,
         markdown=True,
     )
 
-    response = agent.run(message)
+    response = agent.run(with_history(message, history_text))
     return (response.content or "").strip()

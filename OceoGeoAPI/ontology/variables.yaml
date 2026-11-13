@@ -1,0 +1,225 @@
+# Measured variables and coordinates.
+#
+# `source.sql` is the expression that reads the variable from the `obs` view
+# (see core/scoped_sql.py). For BGC parameters `requires_param` is the
+# project_parameters entry that must exist for the variable to be available,
+# and `source.filter` restricts rows to those that measured it.
+#
+# Standards: `cf_standard_name` from the CF Standard Name Table; `argo_name`
+# is the Argo NetCDF parameter code. Fields we could not verify are left null
+# rather than guessed.
+
+concepts:
+  - id: temperature
+    kind: variable
+    label: Temperature
+    aliases: [temperature, temp, sea temperature, water temperature, TEMP, thermal]
+    unit: "°C"
+    argo_name: TEMP
+    cf_standard_name: sea_water_temperature
+    source: {view: obs, sql: temperature, qc: temperature_qc}
+    valid_range: [-2.5, 40]
+    typical: {surface: "-2 to 30 °C", deep: "0 to 5 °C"}
+    meaning: >-
+      In-situ sea water temperature. With salinity it sets seawater density
+      and therefore stratification.
+    anomaly_note: >-
+      Values above ~30 °C or below the freezing point (~-2 °C) are anomalous
+      or bad data. Temperature inversions can be real where warm, salty water
+      lies beneath cooler, fresher water.
+    references: ["Argo User's Manual", "Talley et al. (2011) Descriptive Physical Oceanography"]
+
+  - id: salinity
+    kind: variable
+    label: Salinity
+    aliases: [salinity, salt, saltiness, psal, PSAL, PSU, practical salinity]
+    unit: PSU
+    argo_name: PSAL
+    cf_standard_name: sea_water_practical_salinity
+    source: {view: obs, sql: salinity, qc: salinity_qc}
+    valid_range: [2, 42]
+    typical: {open_ocean: "33 to 37 PSU"}
+    meaning: >-
+      Practical salinity (dissolved salt content). Set at the surface by
+      evaporation minus precipitation, and at depth by water-mass mixing.
+    anomaly_note: >-
+      Above ~37 PSU is typical only of evaporative seas (Mediterranean, Red
+      Sea). Below ~33 PSU occurs near river plumes, sea ice melt or heavy rain.
+    references: ["TEOS-10 Manual (IOC, SCOR and IAPSO, 2010)"]
+
+  - id: pressure
+    kind: variable
+    label: Pressure (depth)
+    aliases: [pressure, depth, dbar, deep, deeper, metres, meters, PRES]
+    unit: dbar
+    argo_name: PRES
+    cf_standard_name: sea_water_pressure
+    source: {view: obs, sql: pressure, qc: pressure_qc}
+    valid_range: [-5, 6500]
+    typical: {core_argo: "0 to 2000 dbar", deep_argo: "up to 6000 dbar"}
+    meaning: >-
+      Sea water pressure; 1 dbar is approximately 1 m of depth, so pressure is
+      used as the depth coordinate. depth_level is an array index, not a depth.
+    anomaly_note: >-
+      Negative values indicate a surface pressure offset (sensor drift).
+    references: ["Argo Quality Control Manual"]
+
+  - id: doxy
+    kind: variable
+    label: Dissolved oxygen
+    aliases: [oxygen, dissolved oxygen, doxy, DOXY, O2, oxygenation]
+    unit: "µmol/kg"
+    argo_name: DOXY
+    cf_standard_name: moles_of_oxygen_per_unit_mass_in_sea_water
+    requires_param: DOXY
+    source:
+      view: obs
+      sql: "COALESCE((extras->>'DOXY_ADJUSTED')::float, (extras->>'DOXY')::float)"
+      filter: "extras ? 'DOXY'"
+    valid_range: [-5, 600]
+    typical: {surface: "180 to 350 µmol/kg", deep: "20 to 250 µmol/kg"}
+    meaning: >-
+      Dissolved oxygen concentration; reflects air-sea exchange,
+      photosynthesis, respiration and how long ago water left the surface.
+    anomaly_note: >-
+      Near-zero values occur in oxygen minimum zones or indicate sensor
+      problems; surface supersaturation occurs during blooms or strong cooling.
+    references: ["BGC-Argo User's Manual"]
+
+  - id: chla
+    kind: variable
+    label: Chlorophyll-a
+    aliases: [chlorophyll, chlorophyll-a, chla, CHLA, phytoplankton, chl]
+    unit: "mg/m³"
+    argo_name: CHLA
+    cf_standard_name: mass_concentration_of_chlorophyll_a_in_sea_water
+    requires_param: CHLA
+    source:
+      view: obs
+      sql: "COALESCE((extras->>'CHLA_ADJUSTED')::float, (extras->>'CHLA')::float)"
+      filter: "extras ? 'CHLA'"
+    valid_range: [-0.5, 100]
+    typical: {surface: "0.01 to 10 mg/m³", deep: "near zero below the euphotic zone"}
+    meaning: Chlorophyll-a concentration, a proxy for phytoplankton biomass.
+    anomaly_note: >-
+      Daytime surface values can be depressed by non-photochemical quenching;
+      spikes may be blooms or particles.
+    references: ["BGC-Argo User's Manual"]
+
+  - id: bbp700
+    kind: variable
+    label: Particle backscattering (700 nm)
+    aliases: [backscatter, backscattering, bbp, bbp700, BBP700, particles, turbidity]
+    unit: "m⁻¹"
+    argo_name: BBP700
+    cf_standard_name: null  # not verified
+    requires_param: BBP700
+    source:
+      view: obs
+      sql: "COALESCE((extras->>'BBP700_ADJUSTED')::float, (extras->>'BBP700')::float)"
+      filter: "extras ? 'BBP700'"
+    valid_range: [-0.001, 0.1]
+    typical: {open_ocean: "1e-4 to 1e-2 m⁻¹"}
+    meaning: Optical backscattering by particles; a proxy for particulate organic carbon.
+    anomaly_note: Spikes are usually large particles or aggregates.
+    references: ["BGC-Argo User's Manual"]
+
+  - id: cdom
+    kind: variable
+    label: Coloured dissolved organic matter
+    aliases: [cdom, CDOM, coloured dissolved organic matter, colored dissolved organic matter]
+    unit: ppb
+    argo_name: CDOM
+    cf_standard_name: null  # not verified
+    requires_param: CDOM
+    source:
+      view: obs
+      sql: "COALESCE((extras->>'CDOM_ADJUSTED')::float, (extras->>'CDOM')::float)"
+      filter: "extras ? 'CDOM'"
+    valid_range: [-5, 500]
+    typical: {}
+    meaning: Fluorescence of coloured dissolved organic matter.
+    anomaly_note: Instrument-dependent; compare relative changes rather than absolute values.
+    references: ["BGC-Argo User's Manual"]
+
+  - id: nitrate
+    kind: variable
+    label: Nitrate
+    aliases: [nitrate, NITRATE, no3, NO3, nutrient, nutrients]
+    unit: "µmol/kg"
+    argo_name: NITRATE
+    cf_standard_name: moles_of_nitrate_per_unit_mass_in_sea_water
+    requires_param: NITRATE
+    source:
+      view: obs
+      sql: "COALESCE((extras->>'NITRATE_ADJUSTED')::float, (extras->>'NITRATE')::float)"
+      filter: "extras ? 'NITRATE'"
+    valid_range: [-5, 60]
+    typical: {surface: "near 0 to 30 µmol/kg (region and season)", deep: "10 to 45 µmol/kg"}
+    meaning: >-
+      Nitrate concentration, a major nutrient for phytoplankton growth that
+      also traces remineralisation and water-mass history.
+    anomaly_note: Negative values are non-physical and indicate calibration or processing problems.
+    references: ["BGC-Argo User's Manual"]
+
+  - id: ph
+    kind: variable
+    label: pH (total scale)
+    aliases: [ph, pH, acidity, acidification, ocean acidification, PH_IN_SITU_TOTAL]
+    unit: "total scale"
+    argo_name: PH_IN_SITU_TOTAL
+    cf_standard_name: sea_water_ph_reported_on_total_scale
+    requires_param: PH_IN_SITU_TOTAL
+    source:
+      view: obs
+      sql: "COALESCE((extras->>'PH_IN_SITU_TOTAL_ADJUSTED')::float, (extras->>'PH_IN_SITU_TOTAL')::float)"
+      filter: "extras ? 'PH_IN_SITU_TOTAL'"
+    valid_range: [6.5, 9]
+    typical: {open_ocean: "~7.6 to 8.3"}
+    meaning: Seawater acidity, part of the marine carbonate system and the ocean acidification signal.
+    anomaly_note: Values outside the typical range usually mean sensor drift or calibration issues.
+    references: ["BGC-Argo User's Manual"]
+
+  - id: sound_velocity
+    kind: variable
+    label: Sound speed
+    aliases: [sound velocity, sound speed, speed of sound, sofar, SOFAR channel, acoustic]
+    unit: m/s
+    available: false
+    unavailable_reason: >-
+      Sound speed is not stored. It can be derived from temperature, salinity
+      and pressure (e.g. Chen–Millero / TEOS-10); planned alongside density.
+    meaning: >-
+      Speed of sound in seawater, a function of temperature, salinity and
+      pressure; typically 1450–1550 m/s. Its minimum near ~1000 m forms the
+      SOFAR channel, a waveguide for long-range sound.
+    references: ["Chen & Millero (1977) J. Acoust. Soc. Am. 62, 1129", "TEOS-10 Manual"]
+
+  - id: density
+    kind: variable
+    label: Seawater density
+    aliases: [density, potential density, sigma, sigma0, sigma-theta, isopycnal, isopycnals, buoyancy]
+    unit: "kg/m³"
+    available: false
+    unavailable_reason: >-
+      Density is not stored yet. It needs the TEOS-10 equation of state
+      (planned: computed with the gsw package at upload). Temperature and
+      salinity can be used as a proxy meanwhile.
+    meaning: Seawater density, which controls stratification and the depth water sinks to.
+    references: ["TEOS-10 Manual (IOC, SCOR and IAPSO, 2010)"]
+
+  - id: time
+    kind: coordinate
+    label: Time
+    aliases: [time, date, when, over time, season, seasonal, month, year, trend, timeline]
+    source: {view: obs, sql: observed_at}
+    meaning: >-
+      Profile time. Order and plot by observed_at; cycle_number repeats across
+      floats and is not a time axis.
+
+  - id: position
+    kind: coordinate
+    label: Position
+    aliases: [position, location, locations, where has, where did, where was, where is the float, latitude, longitude, map, track, trajectory, drift, route, ocean region, which region, what region, which ocean]
+    source: {view: profile_summary, sql: "latitude, longitude"}
+    meaning: Profile position (one per profile). Use the map chart to show it.

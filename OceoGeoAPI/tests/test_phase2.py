@@ -23,14 +23,15 @@ from core.chatbot import (
     SQLAgentNoQueryError,
     _INTENT_MAX_TOKENS,
     _SQL_AGENT_MAX_TOKENS,
+    _SQL_REASONING,
     _SUMMARY_MAX_TOKENS,
     _format_available_params,
     _inject_available_params,
     classify_intent,
     run_sql_agent,
 )
+from core.scoped_sql import build_scoped_query
 from core.tools import (
-    _cap_user_limit,
     _clean_sql_query,
     _strip_param_suffix,
     _validate_jsonb_access,
@@ -243,14 +244,16 @@ class TestSqlCleaning:
         assert "\\n" not in out
         assert "SELECT 1" in out
 
-    def test_caps_large_limit(self):
-        assert _cap_user_limit("SELECT * FROM m LIMIT 999999").endswith("LIMIT 5000")
+    def test_outer_limit_always_applied(self):
+        # The cap wraps the whole agent query, so it holds regardless of any
+        # LIMIT the agent wrote (including LIMITs inside its own CTEs).
+        for q in ("SELECT * FROM obs LIMIT 999999",
+                  "SELECT * FROM obs",
+                  "WITH t AS (SELECT * FROM obs LIMIT 1) SELECT * FROM t, obs"):
+            assert build_scoped_query(q, 5000).rstrip().endswith("LIMIT 5000")
 
-    def test_adds_missing_limit(self):
-        assert _cap_user_limit("SELECT * FROM m").endswith("LIMIT 5000")
-
-    def test_keeps_small_limit(self):
-        assert _cap_user_limit("SELECT * FROM m LIMIT 50").endswith("LIMIT 50")
+    def test_keeps_small_inner_limit(self):
+        assert "LIMIT 50" in build_scoped_query("SELECT * FROM obs LIMIT 50", 5000)
 
 
 # ---------------------------------------------------------------------------
@@ -697,9 +700,9 @@ class TestClassifyIntent:
     def _run(self, content, message="how many profiles are in my project?"):
         """Run classify_intent with a mocked Agent that returns `content`.
 
-        Returns (result, make_openrouter_model_mock).
+        Returns (result, make_model_mock).
         """
-        with patch("core.chatbot.make_openrouter_model") as mock_model, \
+        with patch("core.chatbot.make_model") as mock_model, \
              patch("core.chatbot.Agent") as mock_agent_cls:
             response = MagicMock()
             response.content = content
@@ -726,7 +729,7 @@ class TestClassifyIntent:
         # Regression guard: max_tokens=10 truncates reasoning models
         # mid-thought → empty content → everything looked OFF_TOPIC.
         _, mock_model = self._run("SQL")
-        mock_model.assert_called_once_with(_INTENT_MAX_TOKENS)
+        mock_model.assert_called_once_with(_INTENT_MAX_TOKENS, reasoning_effort="minimal")
 
     def test_raises_on_empty_content(self):
         with pytest.raises(ValueError, match="unparseable"):
@@ -774,7 +777,7 @@ class TestRunSqlAgent:
         return response
 
     @patch("core.chatbot.Agent")
-    @patch("core.chatbot.make_openrouter_model")
+    @patch("core.chatbot.make_model")
     def test_chart_payload_composed_when_spec_valid(self, mock_model, mock_agent_cls):
         # 1. Pre-populate the result store so the spec's result_id resolves.
         store = ResultStore()
@@ -839,8 +842,8 @@ class TestRunSqlAgent:
 
         # Agent budgets must stay sized for reasoning models: SQL agent
         # and summary agent each get their dedicated headroom.
-        mock_model.assert_any_call(_SQL_AGENT_MAX_TOKENS)
-        mock_model.assert_any_call(_SUMMARY_MAX_TOKENS)
+        mock_model.assert_any_call(_SQL_AGENT_MAX_TOKENS, reasoning_effort=_SQL_REASONING)
+        mock_model.assert_any_call(_SUMMARY_MAX_TOKENS, reasoning_effort="minimal")
 
         # 5. Available params were injected into the system message passed to Agent.
         _, kwargs = mock_agent_cls.call_args_list[0]
@@ -849,7 +852,7 @@ class TestRunSqlAgent:
         assert "{available_params}" not in kwargs["system_message"]
 
     @patch("core.chatbot.Agent")
-    @patch("core.chatbot.make_openrouter_model")
+    @patch("core.chatbot.make_model")
     def test_chart_payload_none_when_spec_missing(self, mock_model, mock_agent_cls):
         store = ResultStore()
         rows = [{"x": 1}]
@@ -889,7 +892,7 @@ class TestRunSqlAgent:
         assert result["row_count"] == 1
 
     @patch("core.chatbot.Agent")
-    @patch("core.chatbot.make_openrouter_model")
+    @patch("core.chatbot.make_model")
     def test_summary_agent_failure_keeps_sql_result(self, mock_model, mock_agent_cls):
         store = ResultStore()
         rows = [{"x": 1}]
@@ -926,7 +929,7 @@ class TestRunSqlAgent:
         assert "query returned 1 row" in result["summary"]
 
     @patch("core.chatbot.Agent")
-    @patch("core.chatbot.make_openrouter_model")
+    @patch("core.chatbot.make_model")
     def test_chart_payload_none_when_spec_invalid(self, mock_model, mock_agent_cls):
         store = ResultStore()
         rows = [{"x": 1}]
@@ -975,11 +978,12 @@ class TestRunSqlAgent:
         assert result["chart_payload"] is None
 
     @patch("core.chatbot.Agent")
-    @patch("core.chatbot.make_openrouter_model")
+    @patch("core.chatbot.make_model")
     def test_sql_error_short_circuits_to_error_summary(self, mock_model, mock_agent_cls):
         store = ResultStore()
         sql_response = self._make_response(
-            sql_tool_result={"error": "Only SELECT queries are allowed."},
+            sql_tool_result={"error": "Only SELECT queries are allowed.",
+                             "retryable": False},
             sql_args={"query": "DROP TABLE x"},
         )
         mock_agent = MagicMock()
@@ -1006,7 +1010,7 @@ class TestRunSqlAgent:
         assert mock_agent.run.call_count == 1
 
     @patch("core.chatbot.Agent")
-    @patch("core.chatbot.make_openrouter_model")
+    @patch("core.chatbot.make_model")
     def test_no_query_from_sql_agent_raises(self, mock_model, mock_agent_cls):
         mock_agent = MagicMock()
         mock_agent.run.return_value = self._make_response_without_tools(content="")
@@ -1027,7 +1031,7 @@ class TestRunSqlAgent:
             )
 
     @patch("core.chatbot.Agent")
-    @patch("core.chatbot.make_openrouter_model")
+    @patch("core.chatbot.make_model")
     def test_retries_once_when_first_attempt_produces_no_query(self, mock_model, mock_agent_cls):
         # First attempt: malformed viz call, no SQL. Second attempt: valid SQL.
         store = ResultStore()
@@ -1070,7 +1074,7 @@ class TestRunSqlAgent:
         assert mock_agent.run.call_count == 3  # 2 SQL attempts + 1 summary
 
     @patch("core.chatbot.Agent")
-    @patch("core.chatbot.make_openrouter_model")
+    @patch("core.chatbot.make_model")
     def test_inferred_chart_spec_when_model_skips_viz_tool(self, mock_model, mock_agent_cls):
         # Model runs SQL but never calls create_visualization_spec → the
         # inference fallback must produce a scatter spec from the message.

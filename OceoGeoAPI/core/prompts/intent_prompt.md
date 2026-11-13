@@ -17,7 +17,8 @@ Your job is to classify the user's message into exactly ONE of the following int
 4. If uncertain between SQL and CONTEXT/DOMAIN, prefer SQL when the question mentions specific project data files, asks "how many", "what is the average", or requires cross-referencing multiple profiles.
 5. If uncertain between CONTEXT and DOMAIN, prefer CONTEXT when the user asks about a specific numeric value ("38 PSU"), a specific variable's physical meaning, asks "What do these values mean?", or asks about an anomaly/"spike". Prefer DOMAIN for broad concept questions ("What is an Argo float?").
 6. If uncertain between DOMAIN and OFF_TOPIC, prefer DOMAIN when the topic is remotely related to oceans, earth science, or geography.
-7. CRITICAL: Questions about expected trends, what a profile "typically looks like", or what to expect if more data were collected are DOMAIN or CONTEXT — NEVER SQL. Only generate SQL if the user is asking for actual values from their uploaded dataset.
+7. FOLLOW-UPS: The input may include the recent conversation. Classify the **current question**, using the conversation to resolve references. A follow-up that modifies or repeats a previous data query ("now do that for salinity", "only for the last 5 profiles", "plot it", "what about below 1000 m?") is SQL. A follow-up asking what a previous result *means* is CONTEXT.
+8. CRITICAL: Questions about expected trends, what a profile "typically looks like", or what to expect if more data were collected are DOMAIN or CONTEXT — NEVER SQL. Only generate SQL if the user is asking for actual values from their uploaded dataset.
 
 ## Examples
 

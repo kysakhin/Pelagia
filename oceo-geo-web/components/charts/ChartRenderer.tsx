@@ -1,9 +1,10 @@
 "use client";
 
-import { Component, ErrorInfo, ReactNode, useMemo } from "react";
+import { Component, ErrorInfo, ReactNode, useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import type { ChartPayload } from "@/types";
 import { buildEChartsOption } from "./buildEChartsOption";
+import { ensureWorldMap } from "./worldMap";
 
 // ── Error boundary ──────────────────────────────────────────────────────────
 // If the chart spec is malformed, the builder throws, or the data doesn't
@@ -173,6 +174,46 @@ function ChartCanvas({ payload, style }: ChartRendererProps) {
   );
 }
 
+// Map charts need the world geometry registered first; it is fetched lazily
+// so non-map charts never pay for it. Errors propagate to the boundary.
+function MapCanvas({ payload, style }: ChartRendererProps) {
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    ensureWorldMap()
+      .then(() => !cancelled && setReady(true))
+      .catch((err: unknown) =>
+        !cancelled && setError(err instanceof Error ? err : new Error(String(err)))
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (error) throw new Error(`Could not load world map: ${error.message}`);
+  if (!ready) {
+    return (
+      <div
+        style={{
+          ...style,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#7A8A9A",
+          fontSize: "12px",
+          textTransform: "uppercase",
+          letterSpacing: "0.1em",
+        }}
+      >
+        Loading map…
+      </div>
+    );
+  }
+  return <ChartCanvas payload={payload} style={style} />;
+}
+
 export default function ChartRenderer({ payload, style }: ChartRendererProps) {
   const defaultStyle: React.CSSProperties = {
     width: "100%",
@@ -186,7 +227,11 @@ export default function ChartRenderer({ payload, style }: ChartRendererProps) {
         <ErrorFallback error={error} payload={payload} />
       )}
     >
-      <ChartCanvas payload={payload} style={defaultStyle} />
+      {payload.spec.chart_type === "map" ? (
+        <MapCanvas payload={payload} style={{ ...defaultStyle, height: style?.height ?? "440px" }} />
+      ) : (
+        <ChartCanvas payload={payload} style={defaultStyle} />
+      )}
     </ChartErrorBoundary>
   );
 }
