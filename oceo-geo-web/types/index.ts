@@ -38,7 +38,8 @@ export type ChartType =
   | "heatmap"
   | "pie"
   | "area"
-  | "boxplot";
+  | "boxplot"
+  | "map";      // x = longitude, y = latitude
 
 export interface ChartEncoding {
   x?: string;       // must match a column id from the SQL result metadata
@@ -65,6 +66,7 @@ export interface ChartSpec {
     show_legend?: boolean;
     show_regression?: boolean;
     bin_count?: number;     // histogram only
+    show_track?: boolean;   // map only: connect points in row order (default true)
   };
 }
 

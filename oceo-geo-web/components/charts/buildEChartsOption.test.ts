@@ -384,3 +384,56 @@ describe("buildEChartsOption", () => {
     expect(() => buildEChartsOption(payload)).toThrow("Unknown chart_type");
   });
 });
+
+describe("buildMap", () => {
+  const spec = (encoding: Record<string, string>, options = {}) => ({
+    result_id: "r",
+    chart_type: "map" as const,
+    title: "Track",
+    encoding,
+    options,
+  });
+  const rows = [
+    { file_id: 1, longitude: 73.4, latitude: -40.3, observed_at: "2006-10-22" },
+    { file_id: 1, longitude: 74.1, latitude: -41.0, observed_at: "2006-11-01" },
+    { file_id: 2, longitude: -30.0, latitude: 10.0, observed_at: "2010-01-01" },
+    { file_id: 2, longitude: null, latitude: 10.0, observed_at: "2010-02-01" },
+  ];
+
+  it("draws a track + points per series on the geo component", () => {
+    const opt = buildEChartsOption({
+      spec: spec({ x: "longitude", y: "latitude", series: "file_id" }),
+      data: rows,
+    }) as { geo: { map: string }; series: { type: string; data: unknown[] }[] };
+    expect(opt.geo.map).toBe("world");
+    const types = opt.series.map((s) => s.type);
+    // file 1 has 2 points → track + scatter; file 2 has 1 valid point → scatter only
+    expect(types).toEqual(["lines", "scatter", "scatter"]);
+  });
+
+  it("adds a time colour scale when color is a date column", () => {
+    const opt = buildEChartsOption({
+      spec: spec({ x: "longitude", y: "latitude", color: "observed_at" }),
+      data: rows,
+    }) as { visualMap: { min: number; max: number } };
+    expect(opt.visualMap.min).toBe(Date.parse("2006-10-22"));
+    expect(opt.visualMap.max).toBe(Date.parse("2010-01-01"));
+  });
+
+  it("can hide the track line", () => {
+    const opt = buildEChartsOption({
+      spec: spec({ x: "longitude", y: "latitude" }, { show_track: false }),
+      data: rows,
+    }) as { series: { type: string }[] };
+    expect(opt.series.every((s) => s.type === "scatter")).toBe(true);
+  });
+
+  it("throws without valid coordinates", () => {
+    expect(() =>
+      buildEChartsOption({
+        spec: spec({ x: "longitude", y: "latitude" }),
+        data: [{ longitude: null, latitude: null }],
+      })
+    ).toThrow(/valid latitude/);
+  });
+});

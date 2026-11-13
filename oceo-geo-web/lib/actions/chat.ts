@@ -41,10 +41,22 @@ export interface SendMessageResult {
   chart_payload?: ChartPayload | null;
 }
 
+/** A prior turn sent to the backend so follow-up questions have context. */
+export interface HistoryTurn {
+  role: "user" | "assistant";
+  content: string;
+  intent?: string | null;
+  sql_query?: string | null;
+}
+
+/** How many prior messages (user + assistant) accompany each question. */
+const HISTORY_MESSAGES = 6;
+
 export async function sendChatMessage(
   message: string,
   projectId: number,
-  context?: Record<string, unknown>
+  context?: Record<string, unknown>,
+  history: HistoryTurn[] = []
 ): Promise<SendMessageResult> {
   const { userId } = await auth();
   if (!userId) throw new Error("Not authenticated");
@@ -60,6 +72,7 @@ export async function sendChatMessage(
       user_id: userId,
       project_id: projectId,
       context: context || null,
+      history,
     }),
   });
 
@@ -112,15 +125,33 @@ export async function sendChatMessagePersisted(
     createdConversation = true;
   }
 
-  // 2. Save the user message.
-  const [userMessage] = await Promise.all([
-    addMessage(convId, { role: "user", content: message }),
-  ]);
+  // 2. Load recent turns (before saving the new message, so it isn't
+  //    duplicated) for follow-up context. Failure here must not block chat.
+  let history: HistoryTurn[] = [];
+  if (!createdConversation) {
+    try {
+      const recent = await getMessagesPaginated(convId, HISTORY_MESSAGES);
+      history = recent.messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .filter((m) => m.intent !== "ERROR")
+        .map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content ?? "",
+          intent: m.intent,
+          sql_query: m.sqlQuery,
+        }));
+    } catch (err) {
+      console.error("Failed to load conversation history", err);
+    }
+  }
 
-  // 3. Call the backend AI.
-  const result = await sendChatMessage(message, projectId);
+  // 3. Save the user message.
+  const userMessage = await addMessage(convId, { role: "user", content: message });
 
-  // 4. Save the assistant response. Persist the chart data rows as sql_data
+  // 4. Call the backend AI with the recent conversation.
+  const result = await sendChatMessage(message, projectId, undefined, history);
+
+  // 5. Save the assistant response. Persist the chart data rows as sql_data
   //    so historical charts can re-render without re-querying. Prefer the
   //    chart_payload's data (validated) and fall back to the raw SQL rows.
   const sqlData = result.chart_payload?.data ?? result.data ?? [];
@@ -135,7 +166,7 @@ export async function sendChatMessagePersisted(
     chartSpec,
   });
 
-  // 5. If we created the conversation, the title was already set from the
+  // 6. If we created the conversation, the title was already set from the
   //    first message. For existing conversations, leave the title as-is
   //    (it was set when the conversation was created).
   //    Note: Phase 5.2 may add smarter title generation.
