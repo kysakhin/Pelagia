@@ -359,6 +359,30 @@ def create_visualization_spec_tool():
 
 # ── Helper for tests / chatbot to extract a tool result by name ──────────────
 
+def tool_calls(response, tool_name: str) -> list[tuple[dict | None, dict | None]]:
+    """All calls to `tool_name` in order, as (args, parsed_result) pairs.
+    Unparseable args/results come back as None."""
+    out: list[tuple[dict | None, dict | None]] = []
+    for tu in getattr(response, "tools", None) or []:
+        name = getattr(tu, "tool_name", None) or getattr(tu, "tool", None) or getattr(tu, "name", None)
+        if name != tool_name:
+            continue
+        args = getattr(tu, "tool_args", None)
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except (json.JSONDecodeError, TypeError):
+                args = None
+        result = getattr(tu, "result", None)
+        try:
+            parsed = json.loads(result) if result else None
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+        out.append((args if isinstance(args, dict) else None,
+                    parsed if isinstance(parsed, dict) else None))
+    return out
+
+
 def extract_tool_result(response, tool_name: str, *, last: bool = False) -> dict | None:
     """Walk an Agno `response.tools` list and return the parsed JSON result
     for the first (or, with ``last=True``, the final) tool call named

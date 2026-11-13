@@ -1,0 +1,358 @@
+# Derived quantities: computed from measured variables with an explicit,
+# cited method. `sql_template` is a complete, tested query against the scoped
+# views (obs, profile_summary) — no project filter needed. Literal values the
+# user may want to change are listed under `parameters` (the model edits the
+# literal in the template). Every template is executed by
+# tests/test_ontology_sql_live.py.
+
+concepts:
+  - id: mixed_layer_depth
+    kind: derived
+    label: Mixed layer depth
+    aliases: [mixed layer depth, mld, MLD, surface mixed layer depth, mixing depth]
+    unit: dbar
+    requires: [temperature, pressure]
+    definition: >-
+      Depth of the near-surface layer homogenised by wind and convection.
+    method: >-
+      Temperature threshold criterion: the shallowest depth below 10 dbar where
+      temperature is more than 0.2 °C colder than at the ~10 dbar reference.
+      (The density-based 0.03 kg/m³ criterion needs TEOS-10 density, not yet
+      available.)
+    parameters:
+      threshold_degC: {default: 0.2, description: "temperature drop that ends the mixed layer"}
+      reference_dbar: {default: 10, description: "reference depth"}
+    references: ["de Boyer Montégut et al. (2004), J. Geophys. Res. 109, C12003"]
+    output: [profile_id, observed_at, cycle_number, mixed_layer_depth]
+    default_chart: {chart_type: line, x: observed_at, y: mixed_layer_depth, invert_y: true}
+    sql_template: |
+      WITH ref AS (
+        SELECT DISTINCT ON (profile_id) profile_id, temperature AS ref_temperature
+        FROM obs
+        WHERE pressure BETWEEN 5 AND 15 AND temperature IS NOT NULL
+        ORDER BY profile_id, ABS(pressure - 10)
+      ),
+      mld AS (
+        SELECT o.profile_id, MIN(o.pressure) AS mixed_layer_depth
+        FROM obs o
+        JOIN ref r ON r.profile_id = o.profile_id
+        WHERE o.pressure > 10 AND o.temperature < r.ref_temperature - 0.2
+        GROUP BY o.profile_id
+      )
+      SELECT ps.profile_id, ps.observed_at, ps.cycle_number, m.mixed_layer_depth
+      FROM mld m
+      JOIN profile_summary ps ON ps.profile_id = m.profile_id
+      ORDER BY ps.observed_at
+
+  - id: thermocline_depth
+    kind: derived
+    label: Thermocline depth
+    aliases: [thermocline depth, temperature gradient, steepest temperature drop]
+    unit: dbar
+    requires: [temperature, pressure]
+    definition: Depth where temperature decreases most rapidly with depth.
+    method: >-
+      Depth of the maximum vertical temperature gradient -dT/dp between
+      consecutive levels, between 10 and 1000 dbar (excludes surface noise).
+    parameters:
+      min_dbar: {default: 10}
+      max_dbar: {default: 1000}
+    references: ["Talley et al. (2011) Descriptive Physical Oceanography, ch. 4"]
+    output: [profile_id, observed_at, cycle_number, thermocline_depth, max_gradient]
+    default_chart: {chart_type: line, x: observed_at, y: thermocline_depth, invert_y: true}
+    sql_template: |
+      WITH grad AS (
+        SELECT profile_id, cycle_number, observed_at, pressure,
+               (LAG(temperature) OVER w - temperature)
+                 / NULLIF(pressure - LAG(pressure) OVER w, 0) AS dtdp
+        FROM obs
+        WHERE temperature IS NOT NULL AND pressure BETWEEN 10 AND 1000
+        WINDOW w AS (PARTITION BY profile_id ORDER BY pressure)
+      )
+      SELECT DISTINCT ON (profile_id)
+             profile_id, observed_at, cycle_number,
+             pressure AS thermocline_depth, dtdp AS max_gradient
+      FROM grad
+      WHERE dtdp IS NOT NULL
+      ORDER BY profile_id, dtdp DESC
+
+  - id: isotherm_depth
+    kind: derived
+    label: Isotherm depth
+    aliases: [isotherm, isotherm depth, isotherms]
+    patterns: ['\d+(\.\d+)?\s*(°|deg|degree|degrees)?\s*c?\s+isotherm']
+    unit: dbar
+    requires: [temperature, pressure]
+    definition: Depth at which water first reaches a given temperature.
+    method: >-
+      Shallowest level (below 5 dbar) whose temperature is at or below the
+      isotherm value, per profile. Change 10 to the requested temperature.
+    parameters:
+      isotherm_degC: {default: 10, description: "isotherm temperature"}
+    references: ["Talley et al. (2011) Descriptive Physical Oceanography"]
+    output: [profile_id, observed_at, cycle_number, isotherm_depth]
+    default_chart: {chart_type: line, x: observed_at, y: isotherm_depth, invert_y: true}
+    sql_template: |
+      SELECT o.profile_id, o.observed_at, o.cycle_number, MIN(o.pressure) AS isotherm_depth
+      FROM obs o
+      WHERE o.temperature <= 10 AND o.pressure > 5
+      GROUP BY o.profile_id, o.observed_at, o.cycle_number
+      ORDER BY o.observed_at
+
+  - id: value_at_depth
+    kind: derived
+    label: Value at a depth
+    aliases: [at depth, at a depth, value at depth, at a given depth]
+    patterns: ['\bat\s+(~|about\s+|around\s+)?\d+\s*(m|meters|metres|dbar|db)\b']
+    unit: null
+    requires: [pressure]
+    definition: A variable's value at (closest to) a requested depth in each profile.
+    method: >-
+      For each profile, the measurement closest to the target pressure within
+      ±50 dbar (DISTINCT ON + ORDER BY distance). Swap temperature for any
+      variable's source expression.
+    parameters:
+      depth_dbar: {default: 500}
+      window_dbar: {default: 50}
+    references: []
+    output: [profile_id, observed_at, cycle_number, pressure, temperature]
+    default_chart: {chart_type: line, x: observed_at, y: temperature}
+    sql_template: |
+      SELECT DISTINCT ON (profile_id)
+             profile_id, observed_at, cycle_number, pressure, temperature
+      FROM obs
+      WHERE pressure BETWEEN 450 AND 550 AND temperature IS NOT NULL
+      ORDER BY profile_id, ABS(pressure - 500)
+
+  - id: surface_value
+    kind: derived
+    label: Surface value
+    aliases: [surface, surface value, sea surface, near-surface, at the surface, sst]
+    unit: null
+    requires: [pressure]
+    definition: The shallowest valid measurement of a variable in each profile.
+    method: >-
+      For temperature and salinity use profile_summary.surface_temperature /
+      surface_salinity. For other variables, the shallowest value within the
+      top 10 dbar. Argo floats usually stop sampling a few dbar below the
+      surface, so this is "near-surface".
+    references: []
+    output: [profile_id, observed_at, cycle_number, surface_temperature, surface_salinity]
+    default_chart: {chart_type: line, x: observed_at, y: surface_temperature}
+    sql_template: |
+      SELECT profile_id, observed_at, cycle_number, surface_pressure,
+             surface_temperature, surface_salinity
+      FROM profile_summary
+      WHERE surface_pressure <= 10
+      ORDER BY observed_at
+
+  - id: layer_mean
+    kind: derived
+    label: Layer mean
+    aliases: [layer mean, layer average, average between, mean between, upper ocean, upper ocean average, heat content proxy]
+    unit: null
+    requires: [pressure]
+    definition: Mean of a variable over a depth layer, per profile.
+    method: >-
+      Simple mean of all levels inside the layer (levels are not
+      depth-weighted; Argo sampling is denser near the surface).
+    parameters:
+      top_dbar: {default: 0}
+      bottom_dbar: {default: 200}
+    references: []
+    output: [profile_id, observed_at, cycle_number, mean_temperature, n_levels]
+    default_chart: {chart_type: line, x: observed_at, y: mean_temperature}
+    sql_template: |
+      SELECT profile_id, observed_at, cycle_number,
+             AVG(temperature) AS mean_temperature, COUNT(*) AS n_levels
+      FROM obs
+      WHERE pressure BETWEEN 0 AND 200 AND temperature IS NOT NULL
+      GROUP BY profile_id, observed_at, cycle_number
+      ORDER BY observed_at
+
+  - id: stratification_index
+    kind: derived
+    label: Upper-ocean stratification (temperature proxy)
+    aliases: [stratification, stratified, stability, water column stability, vertical structure]
+    unit: "°C"
+    requires: [temperature, pressure]
+    definition: How strongly the upper ocean is layered.
+    method: >-
+      Proxy: temperature at ~10 dbar minus temperature at ~200 dbar. Larger
+      means more stratified. A proper buoyancy frequency (N²) needs TEOS-10
+      density (not yet available).
+    references: ["Talley et al. (2011) Descriptive Physical Oceanography"]
+    output: [profile_id, observed_at, cycle_number, temp_10dbar, temp_200dbar, delta_t]
+    default_chart: {chart_type: line, x: observed_at, y: delta_t}
+    sql_template: |
+      WITH top AS (
+        SELECT DISTINCT ON (profile_id) profile_id, temperature AS temp_10dbar
+        FROM obs WHERE pressure BETWEEN 5 AND 20 AND temperature IS NOT NULL
+        ORDER BY profile_id, ABS(pressure - 10)
+      ),
+      bottom AS (
+        SELECT DISTINCT ON (profile_id) profile_id, temperature AS temp_200dbar
+        FROM obs WHERE pressure BETWEEN 175 AND 225 AND temperature IS NOT NULL
+        ORDER BY profile_id, ABS(pressure - 200)
+      )
+      SELECT ps.profile_id, ps.observed_at, ps.cycle_number,
+             t.temp_10dbar, b.temp_200dbar, t.temp_10dbar - b.temp_200dbar AS delta_t
+      FROM top t
+      JOIN bottom b ON b.profile_id = t.profile_id
+      JOIN profile_summary ps ON ps.profile_id = t.profile_id
+      ORDER BY ps.observed_at
+
+  - id: intermediate_salinity_maximum
+    kind: derived
+    label: Intermediate salinity maximum
+    aliases: [salinity maximum, salinity max, salty layer, saltiest layer, salinity peak]
+    unit: PSU
+    requires: [salinity, pressure]
+    definition: >-
+      A subsurface local maximum of salinity in the intermediate layer — the
+      classic signature of Mediterranean Outflow Water in the North Atlantic.
+    method: >-
+      Within 600–1600 dbar, levels whose salinity exceeds both neighbours
+      (LAG/LEAD over pressure) are local maxima; the saltiest one per profile
+      is reported. A *local* maximum is used because salinity usually also
+      decreases from a salty surface layer, so the plain maximum below 500 m
+      would just be the top of the window.
+    parameters:
+      top_dbar: {default: 600}
+      bottom_dbar: {default: 1600}
+    references: ["Talley et al. (2011) Descriptive Physical Oceanography, ch. 9"]
+    output: [profile_id, observed_at, cycle_number, smax_depth, smax_salinity, smax_temperature]
+    default_chart: {chart_type: scatter, x: smax_salinity, y: smax_depth, invert_y: true}
+    sql_template: |
+      WITH lvl AS (
+        SELECT profile_id, observed_at, cycle_number, pressure, salinity, temperature,
+               LAG(salinity)  OVER w AS s_above,
+               LEAD(salinity) OVER w AS s_below
+        FROM obs
+        WHERE salinity IS NOT NULL AND pressure BETWEEN 600 AND 1600
+        WINDOW w AS (PARTITION BY profile_id ORDER BY pressure)
+      )
+      SELECT DISTINCT ON (profile_id)
+             profile_id, observed_at, cycle_number,
+             pressure AS smax_depth, salinity AS smax_salinity, temperature AS smax_temperature
+      FROM lvl
+      WHERE salinity > s_above AND salinity > s_below
+      ORDER BY profile_id, salinity DESC
+
+  - id: intermediate_salinity_minimum
+    kind: derived
+    label: Intermediate salinity minimum
+    aliases: [salinity minimum, salinity min, fresh layer, freshest layer]
+    unit: PSU
+    requires: [salinity, pressure]
+    definition: >-
+      A subsurface local minimum of salinity at intermediate depth — the
+      signature of Antarctic Intermediate Water.
+    method: >-
+      Within 400–1300 dbar, levels whose salinity is below both neighbours;
+      the freshest one per profile is reported.
+    parameters:
+      top_dbar: {default: 400}
+      bottom_dbar: {default: 1300}
+    references: ["Talley et al. (2011) Descriptive Physical Oceanography, ch. 9, 13"]
+    output: [profile_id, observed_at, cycle_number, smin_depth, smin_salinity, smin_temperature]
+    default_chart: {chart_type: scatter, x: smin_salinity, y: smin_depth, invert_y: true}
+    sql_template: |
+      WITH lvl AS (
+        SELECT profile_id, observed_at, cycle_number, pressure, salinity, temperature,
+               LAG(salinity)  OVER w AS s_above,
+               LEAD(salinity) OVER w AS s_below
+        FROM obs
+        WHERE salinity IS NOT NULL AND pressure BETWEEN 400 AND 1300
+        WINDOW w AS (PARTITION BY profile_id ORDER BY pressure)
+      )
+      SELECT DISTINCT ON (profile_id)
+             profile_id, observed_at, cycle_number,
+             pressure AS smin_depth, salinity AS smin_salinity, temperature AS smin_temperature
+      FROM lvl
+      WHERE salinity < s_above AND salinity < s_below
+      ORDER BY profile_id, salinity ASC
+
+  - id: oxygen_minimum
+    kind: derived
+    label: Oxygen minimum
+    aliases: [oxygen minimum, lowest oxygen, minimum oxygen, oxygen min]
+    patterns: ['oxygen\b.{0,25}\b(lowest|minimum|smallest)\b', '\b(lowest|minimum|least)\b.{0,20}\boxygen']
+    unit: "µmol/kg"
+    requires: [doxy, pressure]
+    definition: Depth and value of the lowest dissolved oxygen in each profile.
+    method: Minimum of adjusted-with-fallback DOXY per profile.
+    references: ["BGC-Argo User's Manual"]
+    output: [profile_id, observed_at, cycle_number, oxygen_min_depth, min_doxy]
+    default_chart: {chart_type: scatter, x: min_doxy, y: oxygen_min_depth, invert_y: true}
+    sql_template: |
+      WITH ox AS (
+        SELECT profile_id, observed_at, cycle_number, pressure,
+               COALESCE((extras->>'DOXY_ADJUSTED')::float, (extras->>'DOXY')::float) AS doxy
+        FROM obs
+        WHERE extras ? 'DOXY'
+      )
+      SELECT DISTINCT ON (profile_id)
+             profile_id, observed_at, cycle_number,
+             pressure AS oxygen_min_depth, doxy AS min_doxy
+      FROM ox
+      WHERE doxy IS NOT NULL
+      ORDER BY profile_id, doxy ASC
+
+  - id: chlorophyll_maximum_depth
+    kind: derived
+    label: Deep chlorophyll maximum depth
+    aliases: [chlorophyll maximum, chlorophyll max, dcm depth, depth of chlorophyll maximum]
+    unit: dbar
+    requires: [chla, pressure]
+    definition: Depth of the highest chlorophyll-a value in each profile.
+    method: >-
+      Maximum of adjusted-with-fallback CHLA per profile within the top 300
+      dbar (below that, fluorescence is noise).
+    references: ["Cullen (2015) Annu. Rev. Mar. Sci. 7, 207–239"]
+    output: [profile_id, observed_at, cycle_number, chla_max_depth, max_chla]
+    default_chart: {chart_type: line, x: observed_at, y: chla_max_depth, invert_y: true}
+    sql_template: |
+      WITH c AS (
+        SELECT profile_id, observed_at, cycle_number, pressure,
+               COALESCE((extras->>'CHLA_ADJUSTED')::float, (extras->>'CHLA')::float) AS chla
+        FROM obs
+        WHERE extras ? 'CHLA' AND pressure <= 300
+      )
+      SELECT DISTINCT ON (profile_id)
+             profile_id, observed_at, cycle_number,
+             pressure AS chla_max_depth, chla AS max_chla
+      FROM c
+      WHERE chla IS NOT NULL
+      ORDER BY profile_id, chla DESC
+
+  - id: depth_anomaly
+    kind: derived
+    label: Anomaly relative to the project mean
+    aliases: [anomaly, anomalies, deviation, compared to average, warmer than usual, colder than usual, unusual]
+    unit: null
+    requires: [pressure]
+    definition: >-
+      How much each profile differs from the project's mean profile at the
+      same depth.
+    method: >-
+      Bin by 50 dbar; anomaly = profile's bin mean minus the mean over all
+      profiles in that bin. Shown for temperature; swap the variable as needed.
+      This is relative to *this dataset*, not to a climatology.
+    parameters:
+      bin_dbar: {default: 50}
+    references: []
+    output: [profile_id, observed_at, pressure_bin, temperature, temperature_anomaly]
+    default_chart: {chart_type: scatter, x: temperature_anomaly, y: pressure_bin, invert_y: true}
+    sql_template: |
+      WITH binned AS (
+        SELECT profile_id, observed_at, FLOOR(pressure / 50) * 50 AS pressure_bin,
+               AVG(temperature) AS temperature
+        FROM obs
+        WHERE temperature IS NOT NULL AND pressure >= 0
+        GROUP BY profile_id, observed_at, FLOOR(pressure / 50) * 50
+      )
+      SELECT profile_id, observed_at, pressure_bin, temperature,
+             temperature - AVG(temperature) OVER (PARTITION BY pressure_bin) AS temperature_anomaly
+      FROM binned
+      ORDER BY observed_at, pressure_bin

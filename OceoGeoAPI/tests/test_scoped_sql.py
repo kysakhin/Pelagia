@@ -305,3 +305,32 @@ class TestSelfCorrection:
         assert result["query"] == "SELECT good"
         assert result["data"] == [{"avg_temperature": 4.5}]
         assert agent.run.call_count == 2  # no correction round needed
+
+
+@patch("core.chatbot.Agent")
+@patch("core.chatbot.make_model")
+def test_charted_result_wins_over_later_exploratory_query(_model, agent_cls):
+    store = ResultStore()
+    rows = [{"observed_at": "2002-03-15", "mixed_layer_depth": 40.0}]
+    cols = [{"id": "observed_at", "type": "datetime"}, {"id": "mixed_layer_depth", "type": "number"}]
+    rid = store.put(rows=rows, columns=cols, row_count=1)
+    stats_rid = store.put(rows=[{"n": 25}], columns=[{"id": "n", "type": "integer"}], row_count=1)
+    answer = {"result_id": rid, "row_count": 1, "columns": cols, "sample_rows": rows}
+    stats = {"result_id": stats_rid, "row_count": 1, "columns": [{"id": "n", "type": "integer"}], "sample_rows": []}
+    viz = {"status": "ok", "chart_spec": {"result_id": rid, "chart_type": "line", "title": "MLD",
+                                           "encoding": {"x": "observed_at", "y": "mixed_layer_depth"}}}
+    resp = _response([
+        _tool_use("run_sql_query", answer, {"query": "SELECT mld"}),
+        _tool_use("create_visualization_spec", viz),
+        _tool_use("run_sql_query", stats, {"query": "SELECT COUNT(*)"}),
+    ])
+    agent = MagicMock()
+    agent.run.side_effect = [resp, _response([], content="ok")]
+    agent_cls.return_value = agent
+
+    result = run_sql_agent(message="mld over time", user_id="u", project_id=1, system_message="sys",
+                           db=MagicMock(get_project_parameters=MagicMock(return_value=[])),
+                           result_store=store, chart_payload_service=ChartPayloadService(store))
+    assert result["query"] == "SELECT mld"
+    assert result["data"] == rows
+    assert result["chart_payload"] is not None

@@ -1,0 +1,185 @@
+# Benchmark questions for the chat pipeline.
+#
+# Each question runs through ChatService.process_message against a real
+# project and is scored by the `expect` checks below. Run:
+#   .venv/bin/python -m evals.run_eval --label baseline
+#
+# Projects:
+#   8  — "2002-8M": one core float, 25 profiles, Mar–Nov 2002, Canary Basin
+#        (23–26°N, 21–22°W), 0–2000 dbar, no BGC parameters.
+#   4  — "First Project": 27 profiles (several floats), BGC incl. CHLA, BBP700, CDOM, DOXY.
+#   13 — "test": several floats, 55 profiles, global, 4 profiles with DOXY.
+#
+# Check vocabulary (all optional):
+#   intent:        expected intent label, or list of acceptable labels
+#   min_rows:      SQL result must have at least this many rows
+#   max_rows:      SQL result must have at most this many rows
+#   chart:         chart_type must be one of these (list) — implies a chart
+#   no_chart:      true → no chart expected
+#   column_like:   at least one result column id contains one of these substrings
+#   value_range:   {column_like: [...], min, max} — every non-null value of the
+#                  first matching numeric column lies in [min, max]
+#   text_any:      response/summary contains at least one of these (case-insens.)
+#   sql_any:       generated SQL contains at least one of these (case-insens.)
+
+questions:
+  # ── Project 8: core physics, single float ──────────────────────────────────
+  - id: p8_count_profiles
+    project: 8
+    question: How many profiles are in this project?
+    expect: {intent: SQL, min_rows: 1, value_range: {column_like: [count, profile], min: 25, max: 25}}
+
+  - id: p8_avg_temp_deep
+    project: 8
+    question: What is the average temperature below 1000 dbar?
+    expect: {intent: SQL, min_rows: 1, value_range: {column_like: [temp], min: 3, max: 12}}
+
+  - id: p8_latest_profile_plot
+    project: 8
+    question: Plot the temperature profile of the most recent profile
+    expect: {intent: SQL, min_rows: 10, chart: [line, scatter], column_like: [pressure]}
+
+  - id: p8_mld_time
+    project: 8
+    question: How has the mixed layer depth changed over time? Plot it.
+    expect: {intent: SQL, min_rows: 10, chart: [line, scatter, bar, area], value_range: {column_like: [mld, mixed], min: 0, max: 600}}
+
+  - id: p8_map
+    project: 8
+    question: Where has the float been? Show it on a map.
+    expect: {intent: SQL, min_rows: 20, chart: [map], column_like: [latitude]}
+
+  - id: p8_ts_diagram
+    project: 8
+    question: Show me a T-S diagram
+    expect: {intent: SQL, min_rows: 20, chart: [scatter], column_like: [salinity]}
+
+  - id: p8_thermocline
+    project: 8
+    question: At what depth is the thermocline in each profile?
+    expect: {intent: SQL, min_rows: 20, value_range: {column_like: [thermocline, depth, pressure], min: 0, max: 1500}}
+
+  - id: p8_mow
+    project: 8
+    question: Is there Mediterranean Outflow Water in this data?
+    expect: {intent: SQL, min_rows: 1, sql_any: [salinity], text_any: [mediterranean]}
+
+  - id: p8_salinity_max
+    project: 8
+    question: Below 500 m, where is the salinity maximum in each profile and how salty is it?
+    # Salinity falls from a salty surface layer, so the plain max below 500 m is
+    # just the top of the window (~520 dbar). The real intermediate maximum
+    # (diluted Mediterranean water) sits near 1100-1300 dbar.
+    expect: {intent: SQL, min_rows: 20, value_range: {column_like: [depth, pressure], min: 600, max: 1600}}
+
+  - id: p8_surface_temp_hist
+    project: 8
+    question: Show the distribution of surface temperature
+    expect: {intent: SQL, min_rows: 20, chart: [histogram, bar]}
+
+  - id: p8_no_oxygen
+    project: 8
+    question: Plot dissolved oxygen vs depth
+    expect: {intent: [SQL, CONTEXT, DOMAIN], text_any: ["no ", "not ", "unavailable", "isn't", "doesn't", "does not"]}
+
+  - id: p8_seasonal_change
+    project: 8
+    question: How much did the surface temperature change between March and November?
+    expect: {intent: SQL, min_rows: 1, sql_any: [observed_at]}
+
+  - id: p8_isotherm
+    project: 8
+    question: Show the depth of the 10°C isotherm over time
+    expect: {intent: SQL, min_rows: 20, chart: [line, scatter, area], value_range: {column_like: [depth, pressure, isotherm], min: 100, max: 1200}}
+
+  - id: p8_two_depths
+    project: 8
+    question: Compare temperature at 100 m and at 500 m across all profiles
+    expect: {intent: SQL, min_rows: 20, column_like: [temp]}
+
+  - id: p8_inversion
+    project: 8
+    question: Are there any temperature inversions in this float's profiles?
+    expect: {intent: SQL, sql_any: [lag, lead, temperature]}
+
+  # ── Ontology-targeted (water masses, regions, unavailable variables) ───────
+  - id: p8_aaiw
+    project: 8
+    question: Is there Antarctic Intermediate Water in this float's data, and at what depth?
+    # Diluted AAIW shows as an intermediate salinity minimum near ~800 dbar.
+    expect: {intent: SQL, min_rows: 1, sql_any: [salinity], value_range: {column_like: [depth, pressure], min: 500, max: 1300}}
+
+  - id: p8_density
+    project: 8
+    question: Plot potential density against depth
+    # Density is not stored (needs TEOS-10); a good answer says so.
+    expect: {intent: [SQL, CONTEXT, DOMAIN], text_any: ["not available", "not stored", "isn't available", "not computed", "not included", "doesn't include", "does not include", "no density", "cannot", "can't", "TEOS"]}
+
+  - id: p8_region
+    project: 8
+    question: Which ocean region is this float in?
+    expect: {intent: [SQL, CONTEXT, DOMAIN], text_any: [canary]}
+
+  - id: p8_stratification
+    project: 8
+    question: How did upper-ocean stratification change through the year? Plot it.
+    expect: {intent: SQL, min_rows: 20, chart: [line, scatter, area, bar]}
+
+  - id: p4_chl_max
+    project: 4
+    question: At what depth is the chlorophyll maximum in each profile?
+    expect: {intent: SQL, min_rows: 1, value_range: {column_like: [depth, pressure], min: 0, max: 300}}
+
+  # ── Region filtering (ground truth from ontology region boxes) ────────────
+  - id: p13_indian_count
+    project: 13
+    question: How many profiles are in the Indian Ocean?
+    expect: {intent: SQL, min_rows: 1, sql_any: [latitude], value_range: {column_like: [count, profile, n], min: 17, max: 17}}
+
+  - id: p13_southern_count
+    project: 13
+    question: How many profiles were taken in the Southern Ocean?
+    expect: {intent: SQL, min_rows: 1, sql_any: [latitude], value_range: {column_like: [count, profile, n], min: 2, max: 2}}
+
+  - id: p13_med_surface
+    project: 13
+    question: What is the average surface temperature of the profiles in the Mediterranean Sea?
+    expect: {intent: SQL, min_rows: 1, sql_any: [latitude], value_range: {column_like: [temp], min: 10, max: 32}}
+
+  - id: p4_arctic_chla
+    project: 4
+    question: Plot the chlorophyll profiles from the Arctic
+    expect: {intent: SQL, min_rows: 10, chart: [line, scatter], sql_any: [latitude]}
+
+  - id: p4_arctic_no_temp
+    project: 4
+    question: Plot the temperature profiles from the Arctic
+    # The Arctic files in project 4 are BGC-only: no temperature at all.
+    # A good answer finds that and says so instead of plotting nothing.
+    expect: {intent: SQL, sql_any: [latitude], text_any: ["no temperature", "0 temperature", "none of", "not contain", "don't contain", "do not contain", "doesn't contain", "without temperature", "no valid temperature", "lack", "missing", "cannot be plotted", "can't be plotted", "unavailable"]}
+
+  # ── Project 13: multi-float with BGC oxygen ────────────────────────────────
+  - id: p13_oxygen_min
+    project: 13
+    question: At what depth is dissolved oxygen lowest in each profile?
+    expect: {intent: SQL, min_rows: 1, value_range: {column_like: [depth, pressure], min: 0, max: 2100}}
+
+  - id: p13_oxygen_profile
+    project: 13
+    question: Plot the average oxygen profile binned every 100 dbar
+    expect: {intent: SQL, min_rows: 5, chart: [line, scatter], column_like: [doxy, oxygen]}
+
+  - id: p13_oxygen_count
+    project: 13
+    question: How many profiles have oxygen data?
+    expect: {intent: SQL, min_rows: 1, value_range: {column_like: [oxygen, doxy, with, count], min: 4, max: 4}}
+
+  - id: p13_recent_profiles
+    project: 13
+    question: Plot the temperature profiles of the 3 most recent profiles
+    expect: {intent: SQL, min_rows: 10, chart: [line, scatter]}
+
+  - id: p13_correlation
+    project: 13
+    question: What is the correlation between temperature and salinity?
+    expect: {intent: SQL, min_rows: 1, value_range: {column_like: [corr], min: -1, max: 1}}

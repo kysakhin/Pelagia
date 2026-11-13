@@ -1,0 +1,80 @@
+# Named ocean regions as coarse bounding boxes. `lat` is [south, north];
+# `lon` is a list of [west, east] ranges (several ranges for basins that cross
+# the antimeridian). Boxes overlap and are approximate — good for filtering
+# and labelling, not for precise boundaries.
+
+concepts:
+  - id: north_atlantic
+    kind: region
+    label: North Atlantic Ocean
+    aliases: [north atlantic, n atlantic, northern atlantic]
+    lat: [0, 66]
+    lon: [[-80, 0]]
+
+  - id: south_atlantic
+    kind: region
+    label: South Atlantic Ocean
+    aliases: [south atlantic, s atlantic, southern atlantic]
+    lat: [-60, 0]
+    lon: [[-70, 20]]
+
+  - id: canary_basin
+    kind: region
+    label: Canary Basin
+    aliases: [canary basin, canary, canaries, canary current, off west africa, northwest africa]
+    part_of: north_atlantic
+    lat: [20, 36]
+    lon: [[-30, -10]]
+
+  - id: mediterranean_sea
+    kind: region
+    label: Mediterranean Sea
+    aliases: [mediterranean sea, the mediterranean, med sea]
+    lat: [30, 46]
+    lon: [[-6, 36]]
+
+  - id: indian_ocean
+    kind: region
+    label: Indian Ocean
+    aliases: [indian ocean]
+    lat: [-60, 30]
+    lon: [[20, 120]]
+
+  - id: arabian_sea
+    kind: region
+    label: Arabian Sea
+    aliases: [arabian sea]
+    part_of: indian_ocean
+    lat: [0, 25]
+    lon: [[50, 78]]
+
+  - id: north_pacific
+    kind: region
+    label: North Pacific Ocean
+    aliases: [north pacific, n pacific]
+    lat: [0, 66]
+    lon: [[120, 180], [-180, -100]]
+
+  - id: south_pacific
+    kind: region
+    label: South Pacific Ocean
+    aliases: [south pacific, s pacific]
+    lat: [-60, 0]
+    lon: [[150, 180], [-180, -70]]
+
+  - id: southern_ocean
+    kind: region
+    label: Southern Ocean
+    aliases: [southern ocean, antarctic, antarctica, antarctic ocean]
+    lat: [-90, -60]
+    lon: [[-180, 180]]
+    note: >-
+      IHO (2000) limit of 60°S. Oceanographers often extend it north to the
+      Subtropical Front (~40°S); say which definition is used.
+
+  - id: arctic_ocean
+    kind: region
+    label: Arctic Ocean
+    aliases: [arctic ocean, arctic, polar north, high arctic]
+    lat: [66.5, 90]
+    lon: [[-180, 180]]

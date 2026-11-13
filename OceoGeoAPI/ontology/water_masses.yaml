@@ -1,0 +1,77 @@
+# Water masses. Property ranges are approximate core values compiled from
+# Emery & Meincke (1986, Oceanologica Acta 9, 383–391) and Talley et al.
+# (2011); water masses dilute as they spread, so detection relies on the
+# *signature* (e.g. a local salinity extremum in a depth band) more than on
+# absolute thresholds. Treat ranges as guidance, not hard limits.
+
+concepts:
+  - id: mediterranean_outflow_water
+    kind: water_mass
+    label: Mediterranean Outflow Water (MOW)
+    aliases: [mediterranean outflow water, mediterranean water, mow, MOW, meddy, meddies, mediterranean outflow]
+    found_in: [north_atlantic]
+    identified_by: intermediate_salinity_maximum
+    depth_range_dbar: [600, 1600]
+    core_properties: {temperature_degC: [8, 13], salinity_psu: [35.2, 36.5]}
+    signature: >-
+      Warm, salty intermediate water from the Strait of Gibraltar spreading
+      into the eastern North Atlantic at ~1000 m. Shows as a local salinity
+      maximum near 1000–1300 dbar: strong (> 36 PSU) near the Gulf of Cadiz,
+      diluted to ~35.2–35.5 PSU in the Canary Basin and further away.
+    references: ["Emery & Meincke (1986)", "Talley et al. (2011) ch. 9"]
+
+  - id: antarctic_intermediate_water
+    kind: water_mass
+    label: Antarctic Intermediate Water (AAIW)
+    aliases: [antarctic intermediate water, aaiw, AAIW, intermediate water]
+    found_in: [southern_ocean, south_atlantic, indian_ocean, south_pacific, north_atlantic]
+    identified_by: intermediate_salinity_minimum
+    depth_range_dbar: [500, 1300]
+    core_properties: {temperature_degC: [3, 7], salinity_psu: [34.2, 34.6]}
+    signature: >-
+      Cool, fresh intermediate water formed near the Subantarctic Front; a
+      local salinity minimum at ~700–1000 dbar. Fresh (34.2–34.5) in the
+      southern oceans; diluted (~35.0–35.2) where it reaches the subtropical
+      North Atlantic.
+    references: ["Emery & Meincke (1986)", "Talley et al. (2011) ch. 13"]
+
+  - id: north_atlantic_central_water
+    kind: water_mass
+    label: North Atlantic Central Water (NACW)
+    aliases: [north atlantic central water, central water, nacw, NACW, enacw, ENACW, thermocline water]
+    found_in: [north_atlantic]
+    identified_by: null
+    depth_range_dbar: [100, 700]
+    core_properties: {temperature_degC: [8, 19], salinity_psu: [35.0, 36.7]}
+    signature: >-
+      The thermocline water of the subtropical North Atlantic: an almost
+      linear temperature–salinity relation between ~8 °C/35.0 and ~19 °C/36.7
+      in the upper few hundred metres.
+    references: ["Emery & Meincke (1986)", "Talley et al. (2011) ch. 9"]
+
+  - id: north_atlantic_deep_water
+    kind: water_mass
+    label: North Atlantic Deep Water (NADW)
+    aliases: [north atlantic deep water, nadw, NADW, deep water]
+    found_in: [north_atlantic, south_atlantic]
+    identified_by: null
+    depth_range_dbar: [1500, 4000]
+    core_properties: {temperature_degC: [1.5, 4], salinity_psu: [34.85, 35.0]}
+    signature: >-
+      Cold, relatively salty deep water formed in the Nordic and Labrador Seas.
+      Core Argo floats (2000 dbar) only sample its upper part.
+    references: ["Emery & Meincke (1986)", "Talley et al. (2011) ch. 9"]
+
+  - id: subantarctic_mode_water
+    kind: water_mass
+    label: Subantarctic Mode Water (SAMW)
+    aliases: [subantarctic mode water, samw, SAMW, mode water]
+    found_in: [southern_ocean, indian_ocean, south_pacific, south_atlantic]
+    identified_by: null
+    depth_range_dbar: [200, 700]
+    core_properties: {temperature_degC: [4, 15], salinity_psu: [34.2, 35.8]}
+    signature: >-
+      A thick, weakly stratified layer formed by deep winter mixing just north
+      of the Subantarctic Front; shows as a thermostad (small vertical
+      temperature gradient) in the upper ~600 m.
+    references: ["Talley et al. (2011) ch. 13"]

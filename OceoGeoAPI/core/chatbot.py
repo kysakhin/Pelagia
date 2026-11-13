@@ -20,12 +20,15 @@ from core.chart_payload import (
     ChartSpecError,
     ResultStore,
 )
-from core.glossary import GLOSSARY
+from core.ontology import get_ontology
+from core.concept_linker import glossary_text
+from core.result_checks import result_quality_flags
 from core.tools import (
     create_sql_tool,
     create_visualization_spec_tool,
     extract_tool_args,
     extract_tool_result,
+    tool_calls,
 )
 from services.NeondbService import NeonDBService
 
@@ -226,9 +229,18 @@ def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
     """
     content = (response.content or "").strip()
 
-    # The agent may call run_sql_query several times in one run while it
-    # self-corrects; the final call is the one that counts.
+    # The agent may call run_sql_query several times in one run (self-
+    # correction, or extra exploratory queries). The answer is the result the
+    # agent chose to chart, if any; otherwise the final call.
     sql_result = extract_tool_result(response, "run_sql_query", last=True)
+    chosen_args = None
+    viz = extract_tool_result(response, "create_visualization_spec", last=True)
+    charted_id = ((viz or {}).get("chart_spec") or {}).get("result_id")
+    if charted_id:
+        for args, res in tool_calls(response, "run_sql_query"):
+            if res and res.get("result_id") == charted_id:
+                sql_result, chosen_args = res, args
+                break
 
     query = ""
     data: list[dict] = []
@@ -287,7 +299,7 @@ def _extract_sql_outcome(response, store: ResultStore, sql_tool) -> dict:
 
     # Recover query text from tool_args if we still don't have it.
     if not query:
-        args = extract_tool_args(response, "run_sql_query", last=True)
+        args = chosen_args or extract_tool_args(response, "run_sql_query", last=True)
         if args and isinstance(args.get("query"), str):
             query = args["query"]
 
@@ -401,6 +413,36 @@ def _format_available_params(params: list[str] | None) -> str:
     return ", ".join(params)
 
 
+# Sentinel: run_sql_agent fetches project parameters itself unless given.
+_FETCH = object()
+
+
+def fetch_available_params(db: NeonDBService, project_id: int) -> list[str] | None:
+    """Project's BGC parameter names, or None if they could not be loaded
+    (None = unknown: JSONB key validation and availability checks are skipped
+    rather than false-rejecting)."""
+    try:
+        return db.get_project_parameters(project_id)
+    except Exception:
+        logger.exception(
+            "Failed to fetch project_parameters for project %s; "
+            "JSONB key validation will be skipped for this request",
+            project_id,
+        )
+        return None
+
+
+_NO_ONTOLOGY_CONTEXT = "(No specific domain concepts matched this question.)"
+
+
+def _inject_ontology_context(system_message: str, ontology_context: str) -> str:
+    """Fill the {ontology_context} placeholder in the SQL prompt."""
+    text = ontology_context.strip() or _NO_ONTOLOGY_CONTEXT
+    if "{ontology_context}" in system_message:
+        return system_message.replace("{ontology_context}", text)
+    return system_message + "\n\n## Domain knowledge for this question\n\n" + text
+
+
 def _inject_available_params(system_message: str, params: list[str] | None) -> str:
     """Replace the {available_params} placeholder in the SQL prompt with the
     project's current extras parameter list."""
@@ -419,6 +461,9 @@ def run_sql_agent(
     result_store: ResultStore | None = None,
     chart_payload_service: ChartPayloadService | None = None,
     history_text: str = "",
+    available_params: list[str] | None | object = _FETCH,
+    ontology_context: str = "",
+    method_notes: list[str] | None = None,
 ) -> dict:
     """Generate a SQL query via the agent, execute it through the SQL tool,
     optionally produce a chart_spec, and compose a chart_payload outside the
@@ -437,19 +482,12 @@ def run_sql_agent(
     store = result_store if result_store is not None else GLOBAL_RESULT_STORE
     chart_service = chart_payload_service or ChartPayloadService(store)
 
-    # ── 1. Inject available extras parameters into the system prompt ────────
-    available_params: list[str] | None
-    try:
-        available_params = db.get_project_parameters(project_id)
-    except Exception:
-        logger.exception(
-            "Failed to fetch project_parameters for project %s; "
-            "JSONB key validation will be skipped for this request",
-            project_id,
-        )
-        available_params = None  # None = unknown; skip validation rather than false-reject
-    system_message_injected = _inject_available_params(
-        system_message, available_params
+    # ── 1. Inject available extras parameters + ontology context ────────────
+    if available_params is _FETCH:
+        available_params = fetch_available_params(db, project_id)
+    system_message_injected = _inject_ontology_context(
+        _inject_available_params(system_message, available_params),
+        ontology_context,
     )
 
     # ── 2. Build tools bound to this project / result store ─────────────────
@@ -566,6 +604,17 @@ def run_sql_agent(
             chart_payload = None
             # Keep chart_spec in the response for debugging, but no payload.
 
+    # ── 6b. Physical range checks on the full (display-limited) result ──────
+    quality_flags: list[str] = []
+    if data and result_id:
+        try:
+            stored = store.get(result_id)
+            quality_flags = result_quality_flags(
+                stored["rows"] if stored else data, columns, get_ontology()
+            )
+        except Exception:
+            logger.exception("Result range check failed; continuing without flags")
+
     # ── 7. Generate a natural-language summary of the results ───────────────
     first_word = content.lstrip("( \t\n").split()[0].upper() if content.strip() else ""
     content_is_sql = first_word in ("SELECT", "WITH")
@@ -584,11 +633,25 @@ def run_sql_agent(
             ),
             markdown=True,
         )
+        methods_block = ""
+        if quality_flags:
+            methods_block += (
+                "\n\nData quality warnings (mention these briefly):\n- "
+                + "\n- ".join(quality_flags)
+            )
+        if method_notes:
+            methods_block += (
+                "\n\nBackground facts and methods behind this analysis (use them to "
+                "interpret the numbers and mention relevant facts such as the region; "
+                "end with one short 'Method:' line naming the method and reference if "
+                "the answer depends on one):\n- " + "\n- ".join(method_notes)
+            )
         try:
             summary_response = summary_agent.run(
                 f"User question: {message}\n\n"
                 f"Query results (JSON, first {_MESSAGE_PREVIEW_LIMIT} rows):\n"
                 f"{json.dumps(data, default=str)}"
+                f"{methods_block}"
             )
             summary = (summary_response.content or "").strip() or content
         except Exception:
@@ -614,6 +677,7 @@ def run_sql_agent(
         "row_count": row_count,
         "chart_spec": chart_spec,
         "chart_payload": chart_payload,
+        "quality_flags": quality_flags,
     }
 
 
@@ -629,25 +693,16 @@ def run_domain_agent(message: str, system_message: str, history_text: str = "") 
 
 
 def run_context_agent(
-    message: str, context: dict | None, system_message: str, history_text: str = ""
+    message: str,
+    context: dict | None,
+    system_message: str,
+    history_text: str = "",
+    concept_ids: list[str] | None = None,
 ) -> str:
-    """Answer a question about a specific variable or chart pattern using the
-    Ground Truth glossary."""
+    """Answer a question about a specific variable or chart pattern, grounded
+    in the ontology's definitions and valid/typical ranges."""
 
-    glossary_str = "GLOSSARY GROUND TRUTH:\n"
-    for var, details in GLOSSARY.items():
-        glossary_str += (
-            f"- {var.upper()} ({details['unit']}): "
-            f"{details['physical_meaning']}\n"
-        )
-        glossary_str += (
-            f"  Typical ranges: "
-            f"{details.get('typical_surface_range', '')} / "
-            f"{details.get('typical_deep_range', '')} / "
-            f"{details.get('typical_open_ocean_range', '')} / "
-            f"{details.get('typical_argo_range', '')}\n"
-        )
-        glossary_str += f"  Anomalies: {details.get('anomaly_note', '')}\n"
+    glossary_str = glossary_text(get_ontology(), concept_ids)
 
     view_state_str = "\nCURRENT VIEW STATE:\n"
     if context:
